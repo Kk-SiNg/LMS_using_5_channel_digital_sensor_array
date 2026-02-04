@@ -7,6 +7,10 @@
 
 #include "Sensors.h"
 
+// QTRX Configuration Constants
+const uint16_t WHITE_LINE_THRESHOLD = 500;  // Analog threshold for white line detection (0-1000)
+const uint16_t CALIBRATION_SAMPLES = 400;   // Number of calibration samples
+
 Sensors::Sensors() {
     lastPosition = 0.0;
 }
@@ -25,7 +29,7 @@ void Sensors::setup() {
     // Optional: Calibrate sensors
     Serial.println("Calibrating sensors...");
     digitalWrite(ONBOARD_LED, HIGH);
-    for (uint16_t i = 0; i < 400; i++) {
+    for (uint16_t i = 0; i < CALIBRATION_SAMPLES; i++) {
         qtr.calibrate();
     }
     digitalWrite(ONBOARD_LED, LOW);
@@ -57,7 +61,7 @@ void Sensors::readDigital(bool* values) {
     // Convert analog readings to digital
     // Values above threshold indicate white line
     for (uint8_t i = 0; i < 8; i++) {
-        values[i] = (rawValues[i] > 500);  // Threshold at middle point
+        values[i] = (rawValues[i] > WHITE_LINE_THRESHOLD);
     }
 }
 
@@ -84,7 +88,7 @@ float Sensors::getLineError() {
 // ========== HELPER FUNCTIONS ==========
 
 bool Sensors::isLineDetected(uint16_t value, uint8_t sensorIndex) {
-    return (value > 500);  // Higher values indicate white line
+    return (value > WHITE_LINE_THRESHOLD);  // Higher values indicate white line
 }
 
 bool Sensors::onLine() {
@@ -211,5 +215,5 @@ void Sensors::getSensorArray(bool* arr) {
 }
 
 void Sensors::getAnalogArray(uint16_t* arr) {
-    readRaw(arr);  // Returns actual digital values (0 or 1)
+    readRaw(arr);  // Returns actual analog values (0-1000)
 }
