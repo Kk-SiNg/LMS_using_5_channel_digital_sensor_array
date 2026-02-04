@@ -1,11 +1,13 @@
 /*
- * Sensors. h
- * 8-Channel RLS-08 - DIGITAL MODE
+ * Sensors.h
+ * 8-Channel QTRX Sensor Array
+ * Using Pololu QTRSensors library with readLineWhite()
  */
 
 #pragma once
 #include "Pins.h"
 #include <Arduino.h>
+#include <QTRSensors.h>
 
 struct PathOptions {
     bool left = false;
@@ -48,6 +50,7 @@ public:
     int getActiveSensorCount();
 
 private:
+    QTRSensors qtr;
     uint16_t sensorValues[SensorCount];
     
     // Sensor weights: Right(-) to Left(+)
