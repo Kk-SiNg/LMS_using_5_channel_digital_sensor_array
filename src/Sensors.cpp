@@ -1,7 +1,8 @@
 /*
  * Sensors.cpp
- * 8-Channel RLS-08 - DIGITAL MODE
- * INVERTED LOGIC: 0 = White Line, 1 = Black Surface
+ * 8-Channel QTRX Sensor Array
+ * Using Pololu QTRSensors library with readLineWhite()
+ * White lines on black background
  */
 
 #include "Sensors.h"
@@ -11,76 +12,66 @@ Sensors::Sensors() {
 }
 
 void Sensors::setup() {
-    // Configure all sensor pins as digital inputs
-    pinMode(SENSOR_PIN_1, INPUT);
-    pinMode(SENSOR_PIN_2, INPUT);
-    pinMode(SENSOR_PIN_3, INPUT);
-    pinMode(SENSOR_PIN_4, INPUT);
-    pinMode(SENSOR_PIN_5, INPUT);
-    pinMode(SENSOR_PIN_6, INPUT);
-    pinMode(SENSOR_PIN_7, INPUT);
-    pinMode(SENSOR_PIN_8, INPUT);
+    // Configure QTRX sensor array with 8 sensors
+    qtr.setTypeAnalog();
+    qtr.setSensorPins((const uint8_t[]){SENSOR_PIN_1, SENSOR_PIN_2, SENSOR_PIN_3, SENSOR_PIN_4, 
+                                         SENSOR_PIN_5, SENSOR_PIN_6, SENSOR_PIN_7, SENSOR_PIN_8}, SensorCount);
     
     pinMode(ONBOARD_LED, OUTPUT);
     
-    Serial.println("✓ Sensors configured (Digital Mode - Inverted)");
-    Serial.println("  0 = White Line | 1 = Black Surface\n");
+    Serial.println("✓ QTRX Sensors configured");
+    Serial.println("  Using readLineWhite() - White lines on black background\n");
+    
+    // Optional: Calibrate sensors
+    Serial.println("Calibrating sensors...");
+    digitalWrite(ONBOARD_LED, HIGH);
+    for (uint16_t i = 0; i < 400; i++) {
+        qtr.calibrate();
+    }
+    digitalWrite(ONBOARD_LED, LOW);
+    Serial.println("✓ Calibration complete\n");
 }
 
 void Sensors::printCalibration() {
-    Serial.println("Digital mode - No calibration needed");
+    Serial.println("QTRX Calibration Values:");
+    for (uint8_t i = 0; i < SensorCount; i++) {
+        Serial.print("Sensor ");
+        Serial.print(i);
+        Serial.print(": Min=");
+        Serial.print(qtr.calibrationOn.minimum[i]);
+        Serial.print(" Max=");
+        Serial.println(qtr.calibrationOn.maximum[i]);
+    }
 }
 
-// Read all 8 sensors as digital
-// INVERTED: 0 = white line, 1 = black surface
+// Read all 8 sensors as analog values (0-1000)
+// Higher values = more reflective (white line)
 void Sensors::readRaw(uint16_t* values) {
-    values[0] = !digitalRead(SENSOR_PIN_1);  // Right outer
-    values[1] = !digitalRead(SENSOR_PIN_2);
-    values[2] = !digitalRead(SENSOR_PIN_3);
-    values[3] = !digitalRead(SENSOR_PIN_4);  // Center right
-    values[4] = !digitalRead(SENSOR_PIN_5);  // Center left
-    values[5] = !digitalRead(SENSOR_PIN_6);
-    values[6] = !digitalRead(SENSOR_PIN_7);
-    values[7] = !digitalRead(SENSOR_PIN_8);  // Left outer
+    qtr.read(values);
 }
 
 void Sensors::readDigital(bool* values) {
-    // INVERTED: !  to flip logic
-    // We want: true = white line detected
-    values[0] = !digitalRead(SENSOR_PIN_1);  // Invert! 
-    values[1] = !digitalRead(SENSOR_PIN_2);
-    values[2] = !digitalRead(SENSOR_PIN_3);
-    values[3] = !digitalRead(SENSOR_PIN_4);
-    values[4] = !digitalRead(SENSOR_PIN_5);
-    values[5] = !digitalRead(SENSOR_PIN_6);
-    values[6] = !digitalRead(SENSOR_PIN_7);
-    values[7] = !digitalRead(SENSOR_PIN_8);
+    uint16_t rawValues[8];
+    qtr.read(rawValues);
+    
+    // Convert analog readings to digital
+    // Values above threshold indicate white line
+    for (uint8_t i = 0; i < 8; i++) {
+        values[i] = (rawValues[i] > 500);  // Threshold at middle point
+    }
 }
 
-// ========== SIMPLE DIGITAL POSITION CALCULATION ==========
+// ========== QTRX POSITION CALCULATION USING readLineWhite() ==========
 
 float Sensors::getPosition() {
-    bool sensors[8];
-    readDigital(sensors);  // true = white line
+    // Use readLineWhite() which returns position from 0 to 7000
+    // 0 = rightmost sensor, 7000 = leftmost sensor
+    // 3500 = center
+    uint16_t position = qtr.readLineWhite(sensorValues);
     
-    // Weights for 8 sensors: -7 -5 -3 -1 +1 +3 +5 +7
-    // Negative = right side, Positive = left side
-    
-    int weightedSum = 0;
-    int activeCount = 0;
-    
-    for (uint8_t i = 0; i < 8; i++) {
-        if (sensors[i]) {  // If sensor detects white line (inverted to true)
-            weightedSum += weights[i];
-            activeCount++;
-        }
-    }
-    
-    // Calculate position
-    if (activeCount > 0) {
-        lastPosition = (float)weightedSum / (float)activeCount;
-    }
-    // else: keep last known position
+    // Convert from 0-7000 scale to -7 to +7 scale
+    // 0 -> -7 (right), 3500 -> 0 (center), 7000 -> +7 (left)
+    lastPosition = ((float)position - 3500.0) / 500.0;
     
     return lastPosition;
 }
@@ -93,7 +84,7 @@ float Sensors::getLineError() {
 // ========== HELPER FUNCTIONS ==========
 
 bool Sensors::isLineDetected(uint16_t value, uint8_t sensorIndex) {
-    return (value == 0);  // INVERTED: 0 = white line detected
+    return (value > 500);  // Higher values indicate white line
 }
 
 bool Sensors::onLine() {
