@@ -48,12 +48,10 @@ void Motors::setSpeeds(int leftSpeed, int rightSpeed) {
     
     // Left Motor
     if (leftSpeed > 0) {
-        leftSpeed = abs(leftSpeed)*1.017;
         digitalWrite(MOTOR_L_AIN1, HIGH);
         digitalWrite(MOTOR_L_AIN2, LOW);
     } 
     else if (leftSpeed < 0) {
-        leftSpeed = -1*abs(rightSpeed)*1.017;
         digitalWrite(MOTOR_L_AIN1, LOW);
         digitalWrite(MOTOR_L_AIN2, HIGH);
     } 
