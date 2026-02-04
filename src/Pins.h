@@ -14,14 +14,16 @@
 // =========================================================
 
 // Mapping assumes sensors are connected sequentially to the Left Rail
-#define SENSOR_PIN_1  36  // Rightmost Sensor (Connected to TOP physical pin) -> INPUT ONLY
-#define SENSOR_PIN_2  39  // INPUT ONLY
-#define SENSOR_PIN_3  34  // INPUT ONLY
-#define SENSOR_PIN_4  35  // INPUT ONLY
-#define SENSOR_PIN_5  32  // (Bi-directional IO)
-#define SENSOR_PIN_6  33  // (Bi-directional IO)
-#define SENSOR_PIN_7  25  // (Bi-directional IO)
-#define SENSOR_PIN_8  26  // Leftmost Sensor (Connected to BOTTOM physical pin) -> (Bi-directional IO)
+
+// === SENSOR PINOUT ===
+#define SENSOR_PIN_1  32  // Rightmost Sensor
+#define SENSOR_PIN_2  33
+#define SENSOR_PIN_3  25
+#define SENSOR_PIN_4  26
+#define SENSOR_PIN_5  27
+#define SENSOR_PIN_6  14
+#define SENSOR_PIN_7  12
+#define SENSOR_PIN_8  13  // Leftmost Sensor
 const uint8_t SensorCount = 8;
 
 // Digital mode settings
@@ -39,29 +41,29 @@ const uint8_t SensorCount = 8;
 // GPIO 23, 22, 21 are standard IO. 
 // GPIO 5 is a strapping pin (must be HIGH during boot), but standard
 // encoders usually leave this floating or high-Z enough to be safe.
-#define ENCODER_R_A 23
-#define ENCODER_R_B 22
-#define ENCODER_L_A 21
-#define ENCODER_L_B 5   // VSPI SS (Safe if not pulled LOW at boot)
 
-// === MOTOR CONTROL (L298N) ===
-// GPIO 19, 18, 17, 16 are standard.
-// GPIO 4 is safe.
-// GPIO 15 is a strapping pin (MTDO). MUST NOT be pulled HIGH at boot.
-// L298N inputs are high-impedance, so this is generally safe.
-#define MOTOR_R_ENB 19
-#define MOTOR_R_IN4 18
-#define MOTOR_R_IN3 17
+// === ENCODERS ===
+#define ENCODER_L_A 19
+#define ENCODER_L_B 21
+#define ENCODER_R_A 22
+#define ENCODER_R_B 23
 
-#define MOTOR_L_ENA 16
-#define MOTOR_L_IN1 15
-#define MOTOR_L_IN2 4  // MTDO (Keep L298N powered or disconnected during upload if fails)
+// === MOTOR CONTROL (TB6612FNG) - FIXED ===
+#define MOTOR_L_AIN1 17
+#define MOTOR_L_AIN2 16
+#define MOTOR_R_BIN1 18
+#define MOTOR_R_BIN2 5
+
+#define MOTOR_L_PWMA 15    // Left Motor PWM ✓
+#define MOTOR_R_PWMB 4   // ✓ CHANGED from GPIO 0 to GPIO 15
+
+#define MOTOR_STBY   2    // Standby Pin (will set HIGH in setup)
 
 // === RGB LED ===
 // Common Cathode (-) recommended to keep Pins 12/13 LOW during boot.
-#define RGB_PIN_R  14  // Safe GPIO
-#define RGB_PIN_G  12  // MTDI (Strapping: Must NOT be pulled HIGH at boot)
-#define RGB_PIN_B  13  // Safe GPIO
+#define RGB_PIN_R  36  // Safe GPIO
+#define RGB_PIN_G  39  // MTDI (Strapping: Must NOT be pulled HIGH at boot)
+#define RGB_PIN_B  34  // Safe GPIO
 
 // === USER INTERFACE ===
 #define ONBOARD_LED 2   // Blue LED on DevKit
