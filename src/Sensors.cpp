@@ -10,6 +10,7 @@
 // QTRX Configuration Constants
 const uint16_t CALIBRATION_SAMPLES = 400;   // Number of calibration samples
 const uint16_t DEFAULT_THRESHOLD = 500;     // Default threshold before calibration
+const uint16_t MIN_CALIBRATION_RANGE = 100; // Minimum difference between max and min for valid calibration
 
 Sensors::Sensors() {
     lastPosition = 0.0;
@@ -63,13 +64,17 @@ void Sensors::calculateThresholds() {
         uint16_t minVal = qtr.calibrationOn.minimum[i];
         uint16_t maxVal = qtr.calibrationOn.maximum[i];
         
-        // Validate calibration data
-        if (minVal >= maxVal) {
-            // Invalid calibration, use default threshold
+        // Validate calibration data - ensure min < max and sufficient range
+        if (minVal >= maxVal || (maxVal - minVal) < MIN_CALIBRATION_RANGE) {
+            // Invalid or insufficient calibration, use default threshold
             calibratedThresholds[i] = DEFAULT_THRESHOLD;
-            Serial.print("Warning: Invalid calibration for sensor ");
+            Serial.print("Warning: Invalid/insufficient calibration for sensor ");
             Serial.print(i);
-            Serial.println(", using default threshold");
+            Serial.print(" (min=");
+            Serial.print(minVal);
+            Serial.print(", max=");
+            Serial.print(maxVal);
+            Serial.println("), using default threshold");
             continue;
         }
         
