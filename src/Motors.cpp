@@ -20,16 +20,16 @@ int MIN_TURN_PERCENT = 40;  // Start checking sensors after 65% of turn complete
 Motors::Motors() {}
 
 void Motors::setup() {
-    pinMode(MOTOR_L_IN1, OUTPUT);
-    pinMode(MOTOR_L_IN2, OUTPUT);
-    pinMode(MOTOR_R_IN3, OUTPUT);
-    pinMode(MOTOR_R_IN4, OUTPUT);
+    pinMode(MOTOR_L_AIN1, OUTPUT);
+    pinMode(MOTOR_L_AIN2, OUTPUT);
+    pinMode(MOTOR_R_BIN1, OUTPUT);
+    pinMode(MOTOR_R_BIN2, OUTPUT);
     
     ledcSetup(pwm_channel_left, pwm_frequency, pwm_resolution);
     ledcSetup(pwm_channel_right, pwm_frequency, pwm_resolution);
     
-    ledcAttachPin(MOTOR_L_ENA, pwm_channel_left);
-    ledcAttachPin(MOTOR_R_ENB, pwm_channel_right);
+    ledcAttachPin(MOTOR_L_PWMA, pwm_channel_left);
+    ledcAttachPin(MOTOR_R_PWMB, pwm_channel_right);
     
     puType pu_type = puType::up;
     ESP32Encoder::useInternalWeakPullResistors = pu_type;
@@ -49,39 +49,39 @@ void Motors::setSpeeds(int leftSpeed, int rightSpeed) {
     // Left Motor
     if (leftSpeed > 0) {
         leftSpeed = abs(leftSpeed)*1.017;
-        digitalWrite(MOTOR_L_IN1, HIGH);
-        digitalWrite(MOTOR_L_IN2, LOW);
+        digitalWrite(MOTOR_L_AIN1, HIGH);
+        digitalWrite(MOTOR_L_AIN2, LOW);
     } 
     else if (leftSpeed < 0) {
         leftSpeed = -1*abs(rightSpeed)*1.017;
-        digitalWrite(MOTOR_L_IN1, LOW);
-        digitalWrite(MOTOR_L_IN2, HIGH);
+        digitalWrite(MOTOR_L_AIN1, LOW);
+        digitalWrite(MOTOR_L_AIN2, HIGH);
     } 
     else {
-        digitalWrite(MOTOR_L_IN1, LOW);
-        digitalWrite(MOTOR_L_IN2, LOW);
+        digitalWrite(MOTOR_L_AIN1, LOW);
+        digitalWrite(MOTOR_L_AIN2, LOW);
     }
     ledcWrite(pwm_channel_left, abs(leftSpeed));
     
     // Right Motor
     if (rightSpeed > 0) {
-        digitalWrite(MOTOR_R_IN3, HIGH);
-        digitalWrite(MOTOR_R_IN4, LOW);
+        digitalWrite(MOTOR_R_BIN1, HIGH);
+        digitalWrite(MOTOR_R_BIN2, LOW);
     } else if (rightSpeed < 0) {
-        digitalWrite(MOTOR_R_IN3, LOW);
-        digitalWrite(MOTOR_R_IN4, HIGH);
+        digitalWrite(MOTOR_R_BIN1, LOW);
+        digitalWrite(MOTOR_R_BIN2, HIGH);
     } else {
-        digitalWrite(MOTOR_R_IN3, LOW);
-        digitalWrite(MOTOR_R_IN4, LOW);
+        digitalWrite(MOTOR_R_BIN1, LOW);
+        digitalWrite(MOTOR_R_BIN2, LOW);
     }
     ledcWrite(pwm_channel_right, abs(rightSpeed));
 }
 
 void Motors::stopBrake() {
-    digitalWrite(MOTOR_L_IN1, HIGH);
-    digitalWrite(MOTOR_L_IN2, HIGH);
-    digitalWrite(MOTOR_R_IN3, HIGH);
-    digitalWrite(MOTOR_R_IN4, HIGH);
+    digitalWrite(MOTOR_L_AIN1, HIGH);
+    digitalWrite(MOTOR_L_AIN2, HIGH);
+    digitalWrite(MOTOR_R_BIN1, HIGH);
+    digitalWrite(MOTOR_R_BIN2, HIGH);
     ledcWrite(pwm_channel_left, 0);
     ledcWrite(pwm_channel_right, 0);
 }
