@@ -9,12 +9,13 @@
 
 // QTRX Configuration Constants
 const uint16_t CALIBRATION_SAMPLES = 400;   // Number of calibration samples
+const uint16_t DEFAULT_THRESHOLD = 500;     // Default threshold before calibration
 
 Sensors::Sensors() {
     lastPosition = 0.0;
     // Initialize thresholds to a default value
     for (uint8_t i = 0; i < SensorCount; i++) {
-        calibratedThresholds[i] = 500;  // Default fallback
+        calibratedThresholds[i] = DEFAULT_THRESHOLD;  // Default fallback before calibration
     }
 }
 
@@ -63,7 +64,8 @@ void Sensors::calculateThresholds() {
         uint16_t maxVal = qtr.calibrationOn.maximum[i];
         
         // Threshold = midpoint between minimum (black) and maximum (white)
-        calibratedThresholds[i] = (minVal + maxVal) / 2;
+        // Use uint32_t to prevent overflow when adding two uint16_t values
+        calibratedThresholds[i] = ((uint32_t)minVal + maxVal) / 2;
     }
     Serial.println("✓ Thresholds calculated from calibration data");
 }
