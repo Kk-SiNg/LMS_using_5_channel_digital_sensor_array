@@ -64,12 +64,8 @@ void Sensors::calculateThresholds() {
         
         // Threshold = midpoint between minimum (black) and maximum (white)
         calibratedThresholds[i] = (minVal + maxVal) / 2;
-        
-        Serial.print("Sensor ");
-        Serial.print(i);
-        Serial.print(" calibrated threshold: ");
-        Serial.println(calibratedThresholds[i]);
     }
+    Serial.println("✓ Thresholds calculated from calibration data");
 }
 
 // Read all 8 sensors as analog values (0-1000)
