@@ -63,9 +63,19 @@ void Sensors::calculateThresholds() {
         uint16_t minVal = qtr.calibrationOn.minimum[i];
         uint16_t maxVal = qtr.calibrationOn.maximum[i];
         
+        // Validate calibration data
+        if (minVal >= maxVal) {
+            // Invalid calibration, use default threshold
+            calibratedThresholds[i] = DEFAULT_THRESHOLD;
+            Serial.print("Warning: Invalid calibration for sensor ");
+            Serial.print(i);
+            Serial.println(", using default threshold");
+            continue;
+        }
+        
         // Threshold = midpoint between minimum (black) and maximum (white)
         // Use uint32_t to prevent overflow when adding two uint16_t values
-        calibratedThresholds[i] = ((uint32_t)minVal + maxVal) / 2;
+        calibratedThresholds[i] = (uint16_t)(((uint32_t)minVal + maxVal) / 2);
     }
     Serial.println("✓ Thresholds calculated from calibration data");
 }
