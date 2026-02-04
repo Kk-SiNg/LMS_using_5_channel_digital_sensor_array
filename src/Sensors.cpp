@@ -8,11 +8,14 @@
 #include "Sensors.h"
 
 // QTRX Configuration Constants
-const uint16_t WHITE_LINE_THRESHOLD = 500;  // Analog threshold for white line detection (0-1000)
 const uint16_t CALIBRATION_SAMPLES = 400;   // Number of calibration samples
 
 Sensors::Sensors() {
     lastPosition = 0.0;
+    // Initialize thresholds to a default value
+    for (uint8_t i = 0; i < SensorCount; i++) {
+        calibratedThresholds[i] = 500;  // Default fallback
+    }
 }
 
 void Sensors::setup() {
@@ -34,6 +37,9 @@ void Sensors::setup() {
     }
     digitalWrite(ONBOARD_LED, LOW);
     Serial.println("✓ Calibration complete\n");
+    
+    // Calculate thresholds from calibration data
+    calculateThresholds();
 }
 
 void Sensors::printCalibration() {
@@ -44,7 +50,25 @@ void Sensors::printCalibration() {
         Serial.print(": Min=");
         Serial.print(qtr.calibrationOn.minimum[i]);
         Serial.print(" Max=");
-        Serial.println(qtr.calibrationOn.maximum[i]);
+        Serial.print(qtr.calibrationOn.maximum[i]);
+        Serial.print(" Threshold=");
+        Serial.println(calibratedThresholds[i]);
+    }
+}
+
+void Sensors::calculateThresholds() {
+    // Calculate threshold for each sensor as the midpoint between min and max
+    for (uint8_t i = 0; i < SensorCount; i++) {
+        uint16_t minVal = qtr.calibrationOn.minimum[i];
+        uint16_t maxVal = qtr.calibrationOn.maximum[i];
+        
+        // Threshold = midpoint between minimum (black) and maximum (white)
+        calibratedThresholds[i] = (minVal + maxVal) / 2;
+        
+        Serial.print("Sensor ");
+        Serial.print(i);
+        Serial.print(" calibrated threshold: ");
+        Serial.println(calibratedThresholds[i]);
     }
 }
 
@@ -58,10 +82,10 @@ void Sensors::readDigital(bool* values) {
     uint16_t rawValues[8];
     qtr.read(rawValues);
     
-    // Convert analog readings to digital
+    // Convert analog readings to digital using calibrated thresholds
     // Values above threshold indicate white line
     for (uint8_t i = 0; i < 8; i++) {
-        values[i] = (rawValues[i] > WHITE_LINE_THRESHOLD);
+        values[i] = (rawValues[i] > calibratedThresholds[i]);
     }
 }
 
@@ -88,7 +112,7 @@ float Sensors::getLineError() {
 // ========== HELPER FUNCTIONS ==========
 
 bool Sensors::isLineDetected(uint16_t value, uint8_t sensorIndex) {
-    return (value > WHITE_LINE_THRESHOLD);  // Higher values indicate white line
+    return (value > calibratedThresholds[sensorIndex]);  // Use calibrated threshold for each sensor
 }
 
 bool Sensors::onLine() {

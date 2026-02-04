@@ -52,6 +52,7 @@ public:
 private:
     QTRSensors qtr;
     uint16_t sensorValues[SensorCount];
+    uint16_t calibratedThresholds[SensorCount];  // Per-sensor calibrated thresholds
     
     // Sensor weights: Right(-) to Left(+)
     // S1   S2  S3  S4  S5  S6  S7  S8
@@ -60,4 +61,5 @@ private:
     float lastPosition;
     
     bool isLineDetected(uint16_t value, uint8_t sensorIndex);
+    void calculateThresholds();
 };
