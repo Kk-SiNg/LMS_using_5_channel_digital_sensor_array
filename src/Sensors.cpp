@@ -130,10 +130,6 @@ float Sensors::getLineError() {
     // Negative error = line is to the right, positive = line is to the left
     float error = (float)position - CENTER_POSITION;
     
-    // Update lastPosition for backward compatibility with getPosition()
-    // This allows code that reads lastPosition to still work
-    lastPosition = error / 500.0;
-    
     return error;
 }
 

@@ -37,7 +37,7 @@ float Ki = 0.0;     // Integral gain (start with 0)
 float Kd = 0.0014;  // Derivative gain (0.7 / 500)
 float lastError = 0;
 float integral = 0;
-float maxIntegral = 500000;  // Prevent integral windup (1000 * 500)
+float maxIntegral = 500000;  // Pre-scaled for when Ki is used (1000 * 500)
 
 int baseSpeed = 122;    // general base speed for normal runs
 int maxSpeed = 165;     //max speed during run
