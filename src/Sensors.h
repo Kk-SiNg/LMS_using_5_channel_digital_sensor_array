@@ -31,7 +31,7 @@ public:
     Sensors();
     void setup();
     
-    float getLineError();
+    float getLineError();  // Returns error in range -3500 to +3500 (0 = centered)
     PathOptions getAvailablePaths();
     JunctionType classifyJunction(PathOptions paths);
     bool isLineEnd();
@@ -39,7 +39,7 @@ public:
     
     void readRaw(uint16_t* values);
     void readDigital(bool* values);
-    float getPosition();
+    float getPosition();  // Returns position in range -7 to +7 (0 = centered) for backward compatibility
     
     void getSensorArray(bool* arr);
     void getAnalogArray(uint16_t* arr);
@@ -52,6 +52,7 @@ public:
 private:
     QTRSensors qtr;
     uint16_t sensorValues[SensorCount];
+    uint16_t calibratedThresholds[SensorCount];  // Per-sensor calibrated thresholds
     
     // Sensor weights: Right(-) to Left(+)
     // S1   S2  S3  S4  S5  S6  S7  S8
@@ -60,4 +61,5 @@ private:
     float lastPosition;
     
     bool isLineDetected(uint16_t value, uint8_t sensorIndex);
+    void calculateThresholds();
 };

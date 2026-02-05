@@ -8,11 +8,19 @@
 #include "Sensors.h"
 
 // QTRX Configuration Constants
-const uint16_t WHITE_LINE_THRESHOLD = 500;  // Analog threshold for white line detection (0-1000)
 const uint16_t CALIBRATION_SAMPLES = 400;   // Number of calibration samples
+const uint16_t DEFAULT_THRESHOLD = 500;     // Default threshold before calibration
+const uint16_t MIN_CALIBRATION_RANGE = 100; // Minimum difference between max and min for valid calibration
+
+// Position constants for readLineWhite() which returns 0-7000
+const float CENTER_POSITION = 3500.0;  // Center position on 8-sensor array
 
 Sensors::Sensors() {
     lastPosition = 0.0;
+    // Initialize thresholds to a default value
+    for (uint8_t i = 0; i < SensorCount; i++) {
+        calibratedThresholds[i] = DEFAULT_THRESHOLD;  // Default fallback before calibration
+    }
 }
 
 void Sensors::setup() {
@@ -34,6 +42,9 @@ void Sensors::setup() {
     }
     digitalWrite(ONBOARD_LED, LOW);
     Serial.println("✓ Calibration complete\n");
+    
+    // Calculate thresholds from calibration data
+    calculateThresholds();
 }
 
 void Sensors::printCalibration() {
@@ -44,8 +55,37 @@ void Sensors::printCalibration() {
         Serial.print(": Min=");
         Serial.print(qtr.calibrationOn.minimum[i]);
         Serial.print(" Max=");
-        Serial.println(qtr.calibrationOn.maximum[i]);
+        Serial.print(qtr.calibrationOn.maximum[i]);
+        Serial.print(" Threshold=");
+        Serial.println(calibratedThresholds[i]);
     }
+}
+
+void Sensors::calculateThresholds() {
+    // Calculate threshold for each sensor as the midpoint between min and max
+    for (uint8_t i = 0; i < SensorCount; i++) {
+        uint16_t minVal = qtr.calibrationOn.minimum[i];
+        uint16_t maxVal = qtr.calibrationOn.maximum[i];
+        
+        // Validate calibration data - ensure min < max and sufficient range
+        if (minVal >= maxVal || (maxVal - minVal) < MIN_CALIBRATION_RANGE) {
+            // Invalid or insufficient calibration, use default threshold
+            calibratedThresholds[i] = DEFAULT_THRESHOLD;
+            Serial.print("Warning: Invalid/insufficient calibration for sensor ");
+            Serial.print(i);
+            Serial.print(" (min=");
+            Serial.print(minVal);
+            Serial.print(", max=");
+            Serial.print(maxVal);
+            Serial.println("), using default threshold");
+            continue;
+        }
+        
+        // Threshold = midpoint between minimum (black) and maximum (white)
+        // Use uint32_t to prevent overflow when adding two uint16_t values
+        calibratedThresholds[i] = (uint16_t)(((uint32_t)minVal + maxVal) / 2);
+    }
+    Serial.println("✓ Thresholds calculated from calibration data");
 }
 
 // Read all 8 sensors as analog values (0-1000)
@@ -58,10 +98,10 @@ void Sensors::readDigital(bool* values) {
     uint16_t rawValues[8];
     qtr.read(rawValues);
     
-    // Convert analog readings to digital
+    // Convert analog readings to digital using calibrated thresholds
     // Values above threshold indicate white line
     for (uint8_t i = 0; i < 8; i++) {
-        values[i] = (rawValues[i] > WHITE_LINE_THRESHOLD);
+        values[i] = (rawValues[i] > calibratedThresholds[i]);
     }
 }
 
@@ -70,25 +110,33 @@ void Sensors::readDigital(bool* values) {
 float Sensors::getPosition() {
     // Use readLineWhite() which returns position from 0 to 7000
     // 0 = rightmost sensor, 7000 = leftmost sensor
-    // 3500 = center
+    // CENTER_POSITION (3500) = center
     uint16_t position = qtr.readLineWhite(sensorValues);
     
     // Convert from 0-7000 scale to -7 to +7 scale
     // 0 -> -7 (right), 3500 -> 0 (center), 7000 -> +7 (left)
-    lastPosition = ((float)position - 3500.0) / 500.0;
+    lastPosition = ((float)position - CENTER_POSITION) / 500.0;
     
     return lastPosition;
 }
 
 float Sensors::getLineError() {
-    // Error is just the position (0 = centered)
-    return getPosition();
+    // Use the raw position from readLineWhite() for more precise PID control
+    // Returns error in range -3500 to +3500 (centered at 0)
+    // 0 = rightmost, CENTER_POSITION = center (error = 0), 7000 = leftmost
+    uint16_t position = qtr.readLineWhite(sensorValues);
+    
+    // Convert to error: center (CENTER_POSITION) = 0 error
+    // Negative error = line is to the right, positive = line is to the left
+    float error = (float)position - CENTER_POSITION;
+    
+    return error;
 }
 
 // ========== HELPER FUNCTIONS ==========
 
 bool Sensors::isLineDetected(uint16_t value, uint8_t sensorIndex) {
-    return (value > WHITE_LINE_THRESHOLD);  // Higher values indicate white line
+    return (value > calibratedThresholds[sensorIndex]);  // Use calibrated threshold for each sensor
 }
 
 bool Sensors::onLine() {
