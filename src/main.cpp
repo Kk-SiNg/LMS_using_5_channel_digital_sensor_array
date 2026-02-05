@@ -29,12 +29,15 @@ Motors motors;
 PathOptimization optimizer;
 
 // === Simple PID Variables ===
-float Kp = 15.0;   // Proportional gain
-float Ki = 0.0;    // Integral gain (start with 0)
-float Kd = 0.7;   // Derivative gain
+// Updated for 0-7000 position range (error range: -3500 to +3500)
+// Previous values for -7 to +7 range: Kp=15.0, Ki=0.0, Kd=0.7
+// New values scaled down by 500x to maintain similar behavior
+float Kp = 0.03;    // Proportional gain (was 15.0 / 500 = 0.03)
+float Ki = 0.0;     // Integral gain (start with 0)
+float Kd = 0.0014;  // Derivative gain (was 0.7 / 500 = 0.0014)
 float lastError = 0;
 float integral = 0;
-float maxIntegral = 1000;  // Prevent integral windup
+float maxIntegral = 500000;  // Prevent integral windup (scaled up by 500)
 
 int baseSpeed = 122;    // general base speed for normal runs
 int maxSpeed = 165;     //max speed during run

@@ -118,8 +118,19 @@ float Sensors::getPosition() {
 }
 
 float Sensors::getLineError() {
-    // Error is just the position (0 = centered)
-    return getPosition();
+    // Use the raw position from readLineWhite() for more precise PID control
+    // Returns error in range -3500 to +3500 (centered at 0)
+    // 0 = rightmost, 3500 = center (error = 0), 7000 = leftmost
+    uint16_t position = qtr.readLineWhite(sensorValues);
+    
+    // Convert to error: center (3500) = 0 error
+    // Negative error = line is to the right, positive = line is to the left
+    float error = (float)position - 3500.0;
+    
+    // Update lastPosition for backward compatibility (in -7 to +7 scale)
+    lastPosition = error / 500.0;
+    
+    return error;
 }
 
 // ========== HELPER FUNCTIONS ==========

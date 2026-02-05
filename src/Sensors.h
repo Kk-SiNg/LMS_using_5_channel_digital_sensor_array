@@ -31,7 +31,7 @@ public:
     Sensors();
     void setup();
     
-    float getLineError();
+    float getLineError();  // Returns error in range -3500 to +3500 (0 = centered)
     PathOptions getAvailablePaths();
     JunctionType classifyJunction(PathOptions paths);
     bool isLineEnd();
@@ -39,7 +39,7 @@ public:
     
     void readRaw(uint16_t* values);
     void readDigital(bool* values);
-    float getPosition();
+    float getPosition();  // Returns position in range -7 to +7 (0 = centered) for backward compatibility
     
     void getSensorArray(bool* arr);
     void getAnalogArray(uint16_t* arr);
