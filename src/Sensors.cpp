@@ -19,7 +19,7 @@ void Sensors::setup() {
     // Configure QTRX sensor array with 8 sensors
     qtr.setTypeAnalog();
     qtr.setSensorPins((const uint8_t[]){SENSOR_PIN_1, SENSOR_PIN_2, SENSOR_PIN_3, SENSOR_PIN_4, 
-                                         SENSOR_PIN_5, SENSOR_PIN_6, SENSOR_PIN_7, SENSOR_PIN_8}, SensorCount);
+                                        SENSOR_PIN_5, SENSOR_PIN_6, SENSOR_PIN_7, SENSOR_PIN_8}, SensorCount);
     
     pinMode(ONBOARD_LED, OUTPUT);
     

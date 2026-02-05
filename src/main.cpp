@@ -215,7 +215,7 @@ void loop() {
             
             unsigned long dynDebounce = getDynamicDebounce();
             client.printf("] Err:%.1f Spd:%d DB:%lums | ", 
-                         sensors.getLineError(), baseSpeed, dynDebounce);
+                        sensors.getLineError(), baseSpeed, dynDebounce);
             
             switch(currentState) {
                 case WAIT_FOR_RUN_1: client.print("WAIT_RUN1"); break;
@@ -374,7 +374,7 @@ void loop() {
                         // Just move straight slowly, NO PID correction
                         motors.setSpeeds(80, 80);  // Equal speeds = straight movement
                         
-                        PathOptions sample = sensors. getAvailablePaths();
+                        PathOptions sample = sensors.getAvailablePaths();
                         if (sample.left) leftDetections++;
                         if (sample.right) rightDetections++;
                         if (sample.straight) straightDetections++;
@@ -885,8 +885,6 @@ void runPID(int speed, float correction_multiplier) {
     lastError = error;
 }
 
-
-
 String junctionTypeToString(JunctionType type) {
     switch(type) {
         case JUNCTION_T_LEFT: return "T-Left ├";
@@ -1052,7 +1050,7 @@ void processCommand(String cmd) {
         junctionDebounce = cmd.substring(11).toInt();
         junctionDebounce = constrain(junctionDebounce, 100, 1000);
         client.printf("✓ Base Junction Debounce = %lums (Dynamic DB now: %lums)\n", 
-                     junctionDebounce, getDynamicDebounce());
+                    junctionDebounce, getDynamicDebounce());
     }
     
     // === MOTOR TICK TUNING ===
@@ -1259,7 +1257,7 @@ void printStatus() {
     client.printf("PID: Kp=%.1f Ki=%.2f Kd=%.1f\n", Kp, Ki, Kd);
     client.printf("Speed: Base=%d High=%d\n", baseSpeed, highSpeed);
     client.printf("Junction Debounce: Base=%lums Dynamic=%lums\n", 
-                 junctionDebounce, getDynamicDebounce());
+                junctionDebounce, getDynamicDebounce());
     client.printf("Motor Ticks: Center=%d Turn90=%d Turn180=%d\n", TICKS_TO_CENTER, TICKS_FOR_90_DEG, TICKS_FOR_180_DEG);
     client.printf("Error: %.2f\n", sensors.getLineError());
     client.printf("Junctions: %d\n", junctionCount);
