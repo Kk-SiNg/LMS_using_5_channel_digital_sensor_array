@@ -12,6 +12,9 @@ const uint16_t CALIBRATION_SAMPLES = 400;   // Number of calibration samples
 const uint16_t DEFAULT_THRESHOLD = 500;     // Default threshold before calibration
 const uint16_t MIN_CALIBRATION_RANGE = 100; // Minimum difference between max and min for valid calibration
 
+// Position constants for readLineWhite() which returns 0-7000
+const float CENTER_POSITION = 3500.0;  // Center position on 8-sensor array
+
 Sensors::Sensors() {
     lastPosition = 0.0;
     // Initialize thresholds to a default value
@@ -107,12 +110,12 @@ void Sensors::readDigital(bool* values) {
 float Sensors::getPosition() {
     // Use readLineWhite() which returns position from 0 to 7000
     // 0 = rightmost sensor, 7000 = leftmost sensor
-    // 3500 = center
+    // CENTER_POSITION (3500) = center
     uint16_t position = qtr.readLineWhite(sensorValues);
     
     // Convert from 0-7000 scale to -7 to +7 scale
     // 0 -> -7 (right), 3500 -> 0 (center), 7000 -> +7 (left)
-    lastPosition = ((float)position - 3500.0) / 500.0;
+    lastPosition = ((float)position - CENTER_POSITION) / 500.0;
     
     return lastPosition;
 }
@@ -120,14 +123,15 @@ float Sensors::getPosition() {
 float Sensors::getLineError() {
     // Use the raw position from readLineWhite() for more precise PID control
     // Returns error in range -3500 to +3500 (centered at 0)
-    // 0 = rightmost, 3500 = center (error = 0), 7000 = leftmost
+    // 0 = rightmost, CENTER_POSITION = center (error = 0), 7000 = leftmost
     uint16_t position = qtr.readLineWhite(sensorValues);
     
-    // Convert to error: center (3500) = 0 error
+    // Convert to error: center (CENTER_POSITION) = 0 error
     // Negative error = line is to the right, positive = line is to the left
-    float error = (float)position - 3500.0;
+    float error = (float)position - CENTER_POSITION;
     
-    // Update lastPosition for backward compatibility (in -7 to +7 scale)
+    // Update lastPosition for backward compatibility with getPosition()
+    // This allows code that reads lastPosition to still work
     lastPosition = error / 500.0;
     
     return error;
