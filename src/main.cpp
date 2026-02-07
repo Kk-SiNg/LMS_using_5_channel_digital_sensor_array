@@ -39,9 +39,9 @@ float lastError = 0;
 float integral = 0;
 float maxIntegral = 500000;  // Scaled for new error range (1000 * 500). Adjust if enabling Ki.
 
-int baseSpeed = 122;    // general base speed for normal runs
-int maxSpeed = 165;     //max speed during run
-int highSpeed = 145;  // For solving case
+int baseSpeed = 120;    // general base speed for normal runs
+int maxSpeed = 130;     //max speed during run
+int highSpeed = 125;  // For solving case
 
 //Addition
 int junction_identification_delay = 0; //move these many ticks to reverify junction and get available paths
@@ -153,9 +153,9 @@ void setup() {
     Serial.println("╚════════════════════════════════════════╝\n");
     
     pinMode(ONBOARD_LED, OUTPUT);
-    pinMode(RGB_PIN_R, OUTPUT);
-    pinMode(RGB_PIN_G, OUTPUT);
-    pinMode(RGB_PIN_B, OUTPUT);
+    // pinMode(RGB_PIN_R, OUTPUT);
+    // pinMode(RGB_PIN_G, OUTPUT);
+    // pinMode(RGB_PIN_B, OUTPUT);
     
     pinMode(USER_BUTTON, INPUT_PULLUP);
     
@@ -164,12 +164,18 @@ void setup() {
     
     // Calibrate while rotating (gives sensor exposure to both surfaces)
     Serial.println("Starting sensor calibration...");
+    setupWiFi();
+    while (true){
+        if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
+            delay(50);  // Debounce
+            if (digitalRead(USER_BUTTON) == LOW || robotRunning) break;
+        }
+    }
     currentState = CALIBRATING;
     motors.rotate();
     sensors.setup();
     motors.stopBrake();
-    
-    setupWiFi();
+    // WiFi.mode(WIFI_OFF);  // Turn off Wi-Fi completely
     
     Serial.println("╔════════════════════════════════════════╗");
     Serial.println("║  Configuration                         ║");
@@ -288,9 +294,9 @@ void loop() {
         
         case WAIT_FOR_RUN_1:
         {
-            digitalWrite(RGB_PIN_R, LOW);
-            digitalWrite(RGB_PIN_B, HIGH);
-            digitalWrite(RGB_PIN_G, LOW);
+            // digitalWrite(RGB_PIN_R, LOW);
+            // digitalWrite(RGB_PIN_B, HIGH);
+            // digitalWrite(RGB_PIN_G, LOW);
 
             // Wait for button press or START command
             if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
@@ -320,9 +326,9 @@ void loop() {
                     // Wait for button release
                     while(digitalRead(USER_BUTTON) == LOW) delay(10);
 
-                    digitalWrite(RGB_PIN_R, LOW);
-                    digitalWrite(RGB_PIN_B, LOW);
-                    digitalWrite(RGB_PIN_G, HIGH);
+                    // digitalWrite(RGB_PIN_R, LOW);
+                    // digitalWrite(RGB_PIN_B, LOW);
+                    // digitalWrite(RGB_PIN_G, HIGH);
                 }
             }
             break;
@@ -455,9 +461,9 @@ void loop() {
                     if (pathIndex >= MAX_PATH_LENGTH) {
                         Serial.println("❌ ERROR: Path array full!");
 
-                        digitalWrite(RGB_PIN_R, HIGH);
-                        digitalWrite(RGB_PIN_B, LOW);
-                        digitalWrite(RGB_PIN_G, LOW);
+                        // digitalWrite(RGB_PIN_R, HIGH);
+                        // digitalWrite(RGB_PIN_B, LOW);
+                        // digitalWrite(RGB_PIN_G, LOW);
 
                         currentState = FINISHED;
                         break;
@@ -487,12 +493,12 @@ void loop() {
                         motors.moveForward(150);
                         motors.stopBrake();
 
-                        digitalWrite(RGB_PIN_R, HIGH);
-                        digitalWrite(RGB_PIN_B, LOW);
-                        digitalWrite(RGB_PIN_G, LOW);
+                        // digitalWrite(RGB_PIN_R, HIGH);
+                        // digitalWrite(RGB_PIN_B, LOW);
+                        // digitalWrite(RGB_PIN_G, LOW);
 
                         currentState = OPTIMIZING;
-                        digitalWrite(RGB_PIN_R, HIGH);
+                        // digitalWrite(RGB_PIN_R, HIGH);
                         break;
                     }
                     
@@ -681,9 +687,9 @@ void loop() {
         case WAIT_FOR_RUN_2:
         {
 
-            digitalWrite(RGB_PIN_R, HIGH);
-            digitalWrite(RGB_PIN_B, LOW);
-            digitalWrite(RGB_PIN_G, LOW);
+            // digitalWrite(RGB_PIN_R, HIGH);
+            // digitalWrite(RGB_PIN_B, LOW);
+            // digitalWrite(RGB_PIN_G, LOW);
 
             if (digitalRead(USER_BUTTON) == LOW || (robotRunning && optimizedPath.length() > 0)) {
                 delay(50);
@@ -709,9 +715,9 @@ void loop() {
                     
                     while(digitalRead(USER_BUTTON) == LOW) delay(1);
 
-                    digitalWrite(RGB_PIN_R, LOW);
-                    digitalWrite(RGB_PIN_B, HIGH);
-                    digitalWrite(RGB_PIN_G, HIGH);
+                    // digitalWrite(RGB_PIN_R, LOW);
+                    // digitalWrite(RGB_PIN_B, HIGH);
+                    // digitalWrite(RGB_PIN_G, HIGH);
                 }
             }
             break;
@@ -831,9 +837,9 @@ void loop() {
         case FINISHED:
         {
 
-            digitalWrite(RGB_PIN_R, HIGH);
-            digitalWrite(RGB_PIN_B, LOW);
-            digitalWrite(RGB_PIN_G, LOW);
+            // digitalWrite(RGB_PIN_R, HIGH);
+            // digitalWrite(RGB_PIN_B, LOW);
+            // digitalWrite(RGB_PIN_G, LOW);
 
             // Victory blink
             int i = 0;
@@ -1114,6 +1120,7 @@ void processCommand(String cmd) {
         SLOWDOWN_TICKS = ticks;
         client.printf("SLOWDOWN_TICKS = %d\n", SLOWDOWN_TICKS);
     }
+    
 
     //addition for delays
     else if (cmd.startsWith("DBC ")){

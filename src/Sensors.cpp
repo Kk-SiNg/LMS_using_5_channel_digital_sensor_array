@@ -8,7 +8,7 @@
 #include "Sensors.h"
 
 // QTRX Configuration Constants
-const uint16_t CALIBRATION_SAMPLES = 400;   // Number of calibration samples
+const uint16_t CALIBRATION_SAMPLES = 200;   // Number of calibration samples //400 to be set later
 const uint16_t DEFAULT_THRESHOLD = 500;     // Default threshold before calibration
 const uint16_t MIN_CALIBRATION_RANGE = 100; // Minimum difference between max and min for valid calibration
 
@@ -25,23 +25,17 @@ Sensors::Sensors() {
 
 void Sensors::setup() {
     // Configure QTRX sensor array with 8 sensors
-    qtr.setTypeAnalog();
+    qtr.setTypeRC();
     qtr.setSensorPins((const uint8_t[]){SENSOR_PIN_1, SENSOR_PIN_2, SENSOR_PIN_3, SENSOR_PIN_4, 
                                         SENSOR_PIN_5, SENSOR_PIN_6, SENSOR_PIN_7, SENSOR_PIN_8}, SensorCount);
     
     pinMode(ONBOARD_LED, OUTPUT);
     
-    Serial.println("✓ QTRX Sensors configured");
-    Serial.println("  Using readLineWhite() - White lines on black background\n");
-    
-    // Optional: Calibrate sensors
-    Serial.println("Calibrating sensors...");
     digitalWrite(ONBOARD_LED, HIGH);
     for (uint16_t i = 0; i < CALIBRATION_SAMPLES; i++) {
         qtr.calibrate();
     }
     digitalWrite(ONBOARD_LED, LOW);
-    Serial.println("✓ Calibration complete\n");
     
     // Calculate thresholds from calibration data
     calculateThresholds();

@@ -61,9 +61,9 @@ const uint8_t SensorCount = 8;
 
 // === RGB LED ===
 // Common Cathode (-) recommended to keep Pins 12/13 LOW during boot.
-#define RGB_PIN_R  36  // Safe GPIO
-#define RGB_PIN_G  39  // MTDI (Strapping: Must NOT be pulled HIGH at boot)
-#define RGB_PIN_B  34  // Safe GPIO
+// #define RGB_PIN_R  36  // Safe GPIO
+// #define RGB_PIN_G  39  // MTDI (Strapping: Must NOT be pulled HIGH at boot)
+// #define RGB_PIN_B  34  // Safe GPIO
 
 // === USER INTERFACE ===
 #define ONBOARD_LED 2   // Blue LED on DevKit

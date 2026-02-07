@@ -191,7 +191,7 @@ void Motors::turn_180_back_smart(Sensors& sensors) {
 void Motors::rotate() {
     leftEncoder.clearCount();
     rightEncoder.clearCount();
-    setSpeeds(-180, 180);
+    setSpeeds(-130, 130);
 }
 
 void Motors::moveForward(int ticks) {
