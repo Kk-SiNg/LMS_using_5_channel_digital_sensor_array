@@ -3,11 +3,11 @@
  * 8-Channel QTRX Sensor Array
  * Using Pololu QTRSensors library with readLineWhite()
  */
-
 #pragma once
 #include "Pins.h"
 #include <Arduino.h>
 #include <QTRSensors.h>
+#include <WiFi.h>
 
 struct PathOptions {
     bool left = false;
@@ -46,6 +46,7 @@ public:
     
     bool onLine();
     void printCalibration();
+    void printCalibrationToClient(WiFiClient& client);
     
     int getActiveSensorCount();
 

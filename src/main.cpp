@@ -908,47 +908,103 @@ String junctionTypeToString(JunctionType type) {
 }
 
 void setupWiFi() {
-    Serial.print("Connecting to WiFi");
+    Serial.println("\n╔════════════════════════════════════════╗");
+    Serial.println("║              WiFi Setup                ║");
+    Serial.println("╚════════════════════════════════════════╝");
+    
+    // ★★★ CRITICAL: Disconnect any previous connection ★★★
+    WiFi.disconnect(true);
+    delay(100);
+    
+    // ★★★ Set WiFi mode explicitly ★★★
     WiFi.mode(WIFI_STA);
-    WiFi.begin(SSID, PASSWORD);
+    delay(100);
+    
+    Serial.print("Connecting to: ");
+    Serial.println(WIFI_SSID);
+    
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
     
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {  // ★ 40 attempts (20 sec)
         delay(500);
         Serial.print(".");
+        
+        // Print diagnostic status every 10 attempts
+        if (attempts % 10 == 9) {
+            Serial.print(" [Status: ");
+            switch(WiFi.status()) {
+                case WL_IDLE_STATUS:    Serial.print("IDLE"); break;
+                case WL_NO_SSID_AVAIL:  Serial.print("NO SSID"); break;
+                case WL_SCAN_COMPLETED: Serial.print("SCAN DONE"); break;
+                case WL_CONNECT_FAILED: Serial.print("FAILED"); break;
+                case WL_CONNECTION_LOST: Serial.print("LOST"); break;
+                case WL_DISCONNECTED:   Serial.print("DISCONNECTED"); break;
+                default: Serial.print(WiFi.status());
+            }
+            Serial.println("]");
+        }
         attempts++;
     }
     Serial.println();
     
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("✓ WiFi Connected!");
-        Serial.print("IP: ");
+        Serial.print("✓ IP Address: ");
         Serial.println(WiFi.localIP());
+        Serial.print("✓ Signal Strength: ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
         Serial.print("Connect: telnet ");
         Serial.println(WiFi.localIP());
         server.begin();
+        Serial.println("✓ Telnet Server Started on port 23");
     } else {
-        Serial.println("❌ WiFi Failed - Continuing without WiFi");
+        Serial.println("\n❌ WiFi Connection Failed!");
+        Serial.println("  Troubleshooting:");
+        Serial.println("  1. Check SSID and password");
+        Serial.println("  2. Ensure phone hotspot is ON");
+        Serial.println("  3. Move closer to WiFi source");
+        
+        // ★★★ Scan for available networks for debugging ★★★
+        Serial.println("\n  Scanning for available networks...");
+        int n = WiFi.scanNetworks();
+        if (n == 0) {
+            Serial.println("  No networks found!");
+        } else {
+            Serial.printf("  Found %d networks:\n", n);
+            for (int i = 0; i < n && i < 10; i++) {
+                Serial.printf("    %d: %s (%d dBm)\n", i+1, WiFi.SSID(i).c_str(), WiFi.RSSI(i));
+            }
+        }
     }
 }
 
 void handleWiFiClient() {
-    if (!client || !client.connected()) {
-        client = server.available();
-        if (client) {
-            Serial.println("WiFi client connected");
-            client.println("╔════════════════════════════════════════╗");
-            client.println("║  Mesmerize Maze Solver Console       ║");
-            client.println("║  V3.1 - Corrected Debouncing          ║");
-            client.println("╚════════════════════════════════════════╝");
-            printMenu();
+    // ★★★ Use server.hasClient() to properly detect incoming connections ★★★
+    if (server.hasClient()) {
+        if (!client || !client.connected()) {
+            if (client) client.stop();  // ★ Clean up old connection
+            client = server.available();
+            if (client) {
+                Serial.println("✓ Telnet client connected");
+                client.println("╔════════════════════════════════════════╗");
+                client.println("║  Mesmerize Maze Solver Console        ║");
+                client.println("║  V3.1 - Corrected Debouncing          ║");
+                client.println("╚════════════════════════════════════════╝");
+                printMenu();
+            }
         }
     }
     
     if (client && client.connected() && client.available()) {
         String cmd = client.readStringUntil('\n');
         cmd.trim();
-        processCommand(cmd);
+        if (cmd.length() > 0) {
+            Serial.print("[Telnet] ");
+            Serial.println(cmd);
+            processCommand(cmd);
+        }
     }
 }
 
@@ -1205,6 +1261,9 @@ void processCommand(String cmd) {
         client.printf("Finish: %s\n", sensors.isEndPoint() ? "YES" : "NO");
         client.println("==================\n");
     }
+    else if (cmd == "CAL") {
+        sensors.printCalibrationToClient(client);
+    }
     else if (cmd == "PID") {
         client.println("\n=== PID Values ===");
         client.printf("Kp = %.2f\n", Kp);
@@ -1229,6 +1288,7 @@ void printMenu() {
     client.println("PATH - Show path info");
     client.println("DEBOUNCE - Show debounce info");
     client.println("TEST - Test sensors");
+    client.println("CAL  - Show calibration thresholds");
     client.println("PID - Show PID values");
     client.println("");
     client.println("=== PID Tuning ===");

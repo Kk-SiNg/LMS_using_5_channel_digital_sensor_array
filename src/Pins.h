@@ -70,6 +70,6 @@ const uint8_t SensorCount = 8;
 #define USER_BUTTON 0   // BOOT Button (Active LOW)
 
 // === WIFI CONFIGURATION ===
-#define SSID "KKS's phone"
-#define PASSWORD "kvsandkks"
+#define WIFI_SSID "KKS's phone"
+#define WIFI_PASS "kvsandkks"
 #define TELNET_PORT 23

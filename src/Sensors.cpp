@@ -55,6 +55,20 @@ void Sensors::printCalibration() {
     }
 }
 
+void Sensors::printCalibrationToClient(WiFiClient& client) {
+    client.println("\n=== Calibration Thresholds ===");
+    client.println("Sensor | Min    | Max    | Threshold");
+    client.println("-------|--------|--------|----------");
+    for (uint8_t i = 0; i < SensorCount; i++) {
+        client.printf("  S%-2d  | %-6d | %-6d | %-6d\n",
+            i + 1,
+            qtr.calibrationOn.minimum[i],
+            qtr.calibrationOn.maximum[i],
+            calibratedThresholds[i]);
+    }
+    client.println("==============================\n");
+}
+
 void Sensors::calculateThresholds() {
     // Calculate threshold for each sensor as the midpoint between min and max
     for (uint8_t i = 0; i < SensorCount; i++) {
