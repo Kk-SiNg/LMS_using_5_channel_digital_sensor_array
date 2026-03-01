@@ -43,10 +43,10 @@ const uint8_t SensorCount = 8;
 // encoders usually leave this floating or high-Z enough to be safe.
 
 // === ENCODERS ===
-#define ENCODER_L_A 19
-#define ENCODER_L_B 21
-#define ENCODER_R_A 22
-#define ENCODER_R_B 23
+#define ENCODER_L_A 34      //19
+#define ENCODER_L_B 35      //21
+#define ENCODER_R_A 36      //22
+#define ENCODER_R_B 39      //23
 
 // === MOTOR CONTROL (TB6612FNG) - FIXED ===
 #define MOTOR_L_AIN1 17   

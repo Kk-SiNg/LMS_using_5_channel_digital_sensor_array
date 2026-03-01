@@ -166,6 +166,10 @@ void setup() {
     Serial.println("Starting sensor calibration...");
     setupWiFi();
     while (true){
+
+        handleWiFiClient();
+        yield();
+        
         if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
             delay(50);  // Debounce
             if (digitalRead(USER_BUTTON) == LOW || robotRunning) break;
@@ -981,10 +985,10 @@ void setupWiFi() {
 }
 
 void handleWiFiClient() {
-    // ★★★ Use server.hasClient() to properly detect incoming connections ★★★
+    // ★★★ Properly detect incoming connections ★★★
     if (server.hasClient()) {
         if (!client || !client.connected()) {
-            if (client) client.stop();  // ★ Clean up old connection
+            if (client) client.stop();  // Clean up old connection
             client = server.available();
             if (client) {
                 Serial.println("✓ Telnet client connected");
