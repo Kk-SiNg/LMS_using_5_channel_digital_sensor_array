@@ -87,15 +87,14 @@ void Sensors::calculateThresholds() {
 void Sensors::readRaw(uint16_t* values) {
     qtr.read(values);
 }
-
 void Sensors::readDigital(bool* values) {
     uint16_t rawValues[8];
     qtr.read(rawValues);
     
-    // Convert analog readings to digital using calibrated thresholds
-    // Values above threshold indicate white line
+    // In RC mode: lower values = more reflective (white line)
+    // Values BELOW threshold indicate white line
     for (uint8_t i = 0; i < 8; i++) {
-        values[i] = (rawValues[i] > calibratedThresholds[i]);
+        values[i] = (rawValues[i] < calibratedThresholds[i]);
     }
 }
 
@@ -128,9 +127,8 @@ float Sensors::getLineError() {
 }
 
 // ========== HELPER FUNCTIONS ==========
-
 bool Sensors::isLineDetected(uint16_t value, uint8_t sensorIndex) {
-    return (value > calibratedThresholds[sensorIndex]);  // Use calibrated threshold for each sensor
+    return (value < calibratedThresholds[sensorIndex]);
 }
 
 bool Sensors::onLine() {

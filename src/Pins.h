@@ -49,13 +49,13 @@ const uint8_t SensorCount = 8;
 #define ENCODER_R_B 23
 
 // === MOTOR CONTROL (TB6612FNG) - FIXED ===
-#define MOTOR_L_AIN1 17
-#define MOTOR_L_AIN2 16
-#define MOTOR_R_BIN1 18
+#define MOTOR_L_AIN1 17   
+#define MOTOR_L_AIN2 16   
+#define MOTOR_R_BIN1 18   
 #define MOTOR_R_BIN2 5
 
-#define MOTOR_L_PWMA 15    // Left Motor PWM ✓
-#define MOTOR_R_PWMB 4   // ✓ CHANGED from GPIO 0 to GPIO 15
+#define MOTOR_L_PWMA 4
+#define MOTOR_R_PWMB 15
 
 #define MOTOR_STBY   2    // Standby Pin (will set HIGH in setup)
 
