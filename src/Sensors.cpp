@@ -77,19 +77,19 @@ void Sensors::calculateThresholds() {
         uint16_t minVal = qtr.calibrationOn.minimum[i];
         uint16_t maxVal = qtr.calibrationOn.maximum[i];
         
-        // Validate calibration data - ensure min < max and sufficient range
-        if (minVal >= maxVal || (maxVal - minVal) < MIN_CALIBRATION_RANGE) {
-            // Invalid or insufficient calibration, use default threshold
-            calibratedThresholds[i] = DEFAULT_THRESHOLD;
-            Serial.print("Warning: Invalid/insufficient calibration for sensor ");
-            Serial.print(i);
-            Serial.print(" (min=");
-            Serial.print(minVal);
-            Serial.print(", max=");
-            Serial.print(maxVal);
-            Serial.println("), using default threshold");
-            continue;
-        }
+        // // Validate calibration data - ensure min < max and sufficient range
+        // if (minVal >= maxVal || (maxVal - minVal) < MIN_CALIBRATION_RANGE) {
+        //     // Invalid or insufficient calibration, use default threshold
+        //     calibratedThresholds[i] = DEFAULT_THRESHOLD;
+        //     Serial.print("Warning: Invalid/insufficient calibration for sensor ");
+        //     Serial.print(i);
+        //     Serial.print(" (min=");
+        //     Serial.print(minVal);
+        //     Serial.print(", max=");
+        //     Serial.print(maxVal);
+        //     Serial.println("), using default threshold");
+        //     continue;
+        // }
         
         // Threshold = midpoint between minimum (black) and maximum (white)
         // Use uint32_t to prevent overflow when adding two uint16_t values
@@ -200,33 +200,51 @@ int Sensors::getActiveSensorCount() {
 }
 
 // ========== JUNCTION DETECTION ==========
-
 PathOptions Sensors::getAvailablePaths() {
     bool sensors[8];
     readDigital(sensors);
     
     PathOptions paths;
     
-    // Count active sensors (detecting white line)
     int activeCount = 0;
     for (int i = 0; i < 8; i++) {
         if (sensors[i]) activeCount++;
     }
     
-    // Junction = 5 or more sensors active
-    // Normal line = 2-3 sensors (as you described)
-    if (activeCount >= 5) {
-        // LEFT: S7 or S8 active
-        paths.left = (sensors[5] && sensors[6] && sensors[7]);
+    // CHANGE: Require 6+ sensors for junction (bumps rarely activate 6+)
+    // Also check for SPATIAL PATTERN, not just count
+    if (activeCount >= 6) {
+        // LEFT: outermost left sensors must be active
+        paths.left = (sensors[6] && sensors[7]);
         
-        // RIGHT: S1 or S2 active
-        paths.right = (sensors[0] && sensors[1] && sensors[2]);
+        // RIGHT: outermost right sensors must be active  
+        paths.right = (sensors[0] && sensors[1]);
         
-        // STRAIGHT: S4 or S5 active (center)
+        // STRAIGHT: center sensors active
         paths.straight = (sensors[3] && sensors[4]);
     }
+    else if (activeCount >= 4) {
+        // AMBIGUOUS ZONE — check spatial spread
+        // A real junction has sensors spread across the full width
+        // A bump tends to activate adjacent sensors
+        
+        bool hasLeftEdge = sensors[6] || sensors[7];
+        bool hasRightEdge = sensors[0] || sensors[1];
+        bool hasCenter = sensors[3] || sensors[4];
+        
+        // Only treat as junction if sensors span from edge to center
+        if ((hasLeftEdge && hasCenter) || (hasRightEdge && hasCenter)) {
+            paths.left = (sensors[6] && sensors[7]);
+            paths.right = (sensors[0] && sensors[1]);
+            paths.straight = (sensors[3] && sensors[4]);
+        } else {
+            // Adjacent cluster = likely bump or thick line, not a junction
+            paths.left = false;
+            paths.right = false;
+            paths.straight = (activeCount > 0);
+        }
+    }
     else {
-        // Normal line - not a junction (2-3 sensors)
         paths.left = false;
         paths.right = false;
         paths.straight = (activeCount > 0);
@@ -234,7 +252,6 @@ PathOptions Sensors::getAvailablePaths() {
     
     return paths;
 }
-
 
 PathOptions Sensors::getAvailablePaths_2() {
     bool sensors[8];
@@ -306,12 +323,16 @@ bool Sensors::isLineEnd() {
     readDigital(sensors);
     
     // Line end = ALL sensors see black (none active)
+    int counter = 8;
     for (uint8_t i = 0; i < 8; i++) {
         if (sensors[i]) {
-            return false;  // Still seeing white line
+            counter--;  // Still seeing white line
         }
     }
-    return true;  // All sensors see black = line end
+    if(counter >= 7){
+        return true;
+    }
+    else return false;  // All sensors see black = line end
 }
 
 bool Sensors::isEndPoint() {

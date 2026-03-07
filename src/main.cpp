@@ -39,8 +39,8 @@ float lastError = 0;
 float integral = 0;
 float maxIntegral = 500000;  // Scaled for new error range (1000 * 500). Adjust if enabling Ki.
 
-int baseSpeed = 60;    // general base speed for normal runs
-int maxSpeed = 70;     //max speed during run
+int baseSpeed = 70;    // general base speed for normal runs
+int maxSpeed = 90;     //max speed during run
 int highSpeed = 140;  // For solving case
 
 //Addition
@@ -363,25 +363,43 @@ void loop() {
                 if (pathsA1.straight) pathCount++;
                 
                 // Is this a junction?  (more than just straight OR only left/right)
-                bool isJunction = (pathCount > 1) || (pathCount == 1 && !pathsA1.straight);
+                bool isJunction_check_1 = (pathCount > 1) || (pathCount == 1 && !pathsA1.straight);
+                bool isjunction_check_2 = 0;    
+                if(isJunction_check_1){
+                    int confirmations = 0;
+                    for (int i = 0; i < 5; i++) {  // Take 5 quick samples
+                        PathOptions p = sensors.getAvailablePaths();
+                        int pc = 0;
+                        if (p.left) pc++;
+                        if (p.right) pc++;
+                        if (p.straight) pc++;
+                        if ((pc > 1) || (pc == 1 && !p.straight)) {
+                            confirmations++;
+                        }
+                        delayMicroseconds(500);  // 0.5ms between samples
+                    }
+                    if(confirmations > 3) isjunction_check_2 = true;
+                    else isjunction_check_2 = false;
+                }
+                    
 
                 // if (client && client.connected()) client.printf("leftA: %d, rightA: %d \n", pathsA.left, pathsA.right);
                 // if (client && client.connected()) client.println();
-                if (isJunction) {
+                if (isJunction_check_1 && isjunction_check_2) {
                     // Record segment ticks BEFORE any junction handling
                     long segmentTicks = motors.getAverageCount();
                     
                     motors.stopBrake();
                     delay(1);
                     
-                    // Continuous path detection for 50ms WITHOUT PID (to avoid drift)
+                    // Continuous path detection for 100ms WITHOUT PID (to avoid drift)
                     unsigned long detectionStartTime = millis();
                     int leftDetections = 0;
                     int rightDetections = 0;
                     int straightDetections = 0;
                     int totalSamples = 0;
                     
-                    // Track starting position for the 50ms sampling movement
+                    // Track starting position for the 100ms sampling movement
                     long samplingStartTicks = motors.getAverageCount();
                     
                     while (millis() - detectionStartTime < 100) {  // 100ms continuous detection
@@ -482,6 +500,7 @@ void loop() {
                     
                     // Clear encoders BEFORE turn
                     motors.clearEncoders();
+                    delay(1);
                     
                     junctionCount++;
                     
@@ -1274,6 +1293,33 @@ void processCommand(String cmd) {
         client.printf("Finish: %s\n", sensors.isEndPoint() ? "YES" : "NO");
         client.println("==================\n");
     }
+    else if (cmd == "ENCTEST") {
+    motors.clearEncoders();
+    motors.setSpeeds(100, 100);  // Both forward
+    delay(1000);
+    motors.stopBrake();
+    
+    long left = motors.getLeftCount();
+    long right = motors.getRightCount();
+    
+    client.printf("Left encoder:  %ld\n", left);
+    client.printf("Right encoder: %ld\n", right);
+    client.printf("Difference:    %ld (%.1f%%)\n", 
+                abs(left - right), 
+                100.0 * abs(left - right) / max(left, right));
+    
+    // Run test 5 times
+    for (int t = 0; t < 5; t++) {
+        motors.clearEncoders();
+        motors.setSpeeds(100, 100);
+        delay(500);
+        motors.stopBrake();
+        delay(100);
+        client.printf("Trial %d: L=%ld R=%ld diff=%ld\n", 
+                    t, motors.getLeftCount(), motors.getRightCount(),
+                    abs(motors.getLeftCount() - motors.getRightCount()));
+    }
+}
 
     //sensing
     else if (cmd == "CAL") {

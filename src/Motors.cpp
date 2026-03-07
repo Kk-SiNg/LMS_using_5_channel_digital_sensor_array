@@ -15,7 +15,7 @@ int TICKS_TO_CENTER = 150;       //old 100
 int BASE_SPEED = 130;
 int TURN_SPEED = 125;
 int MAX_SPEED = 200;
-int MIN_TURN_PERCENT = 40;  // Start checking sensors after 65% of turn complete
+int MIN_TURN_PERCENT = 80;  // Start checking sensors after 65% of turn complete
 
 Motors::Motors() {}
 
@@ -113,8 +113,6 @@ void Motors::turn_180_back() {
 // ========== NEW:  SMART TURN METHODS WITH SENSOR FEEDBACK ==========
 
 void Motors::turn_90_left_smart(Sensors& sensors) {
-    leftEncoder.clearCount();
-    rightEncoder.clearCount();
     setSpeeds(-TURN_SPEED, TURN_SPEED);
     
     // Calculate minimum ticks before we start checking sensors
@@ -128,7 +126,7 @@ void Motors::turn_90_left_smart(Sensors& sensors) {
             
             // Check center sensors (S4 and S5 - indices 3 and 4)
             // These are the primary line-following sensors
-            if (sensorVals[3] || sensorVals[4] || sensorVals[5] || sensorVals[6]) {
+            if ((sensorVals[3] && sensorVals[4]) || (sensorVals[4] && sensorVals[5]) || (sensorVals[5] && sensorVals[6]) || (sensorVals[6] && sensorVals[7])) {
                 break;  // Exit early - line found!
             }
         }
@@ -139,8 +137,7 @@ void Motors::turn_90_left_smart(Sensors& sensors) {
 }
 
 void Motors::turn_90_right_smart(Sensors& sensors) {
-    leftEncoder.clearCount();
-    rightEncoder.clearCount();
+
     setSpeeds(TURN_SPEED, -TURN_SPEED);
     
     // Calculate minimum ticks before we start checking sensors
@@ -153,7 +150,7 @@ void Motors::turn_90_right_smart(Sensors& sensors) {
             sensors.getSensorArray(sensorVals);
             
             // Check center sensors (S4 and S5 - indices 3 and 4)
-            if (sensorVals[1] || sensorVals[2] || sensorVals[3] || sensorVals[4]) {
+            if ((sensorVals[0] && sensorVals[1]) || (sensorVals[1] && sensorVals[2]) || (sensorVals[2] && sensorVals[3]) || (sensorVals[3] && sensorVals[4])) {
                 break;  // Exit early - line found!
             }
         }
@@ -164,8 +161,7 @@ void Motors::turn_90_right_smart(Sensors& sensors) {
 }
 
 void Motors::turn_180_back_smart(Sensors& sensors) {
-    leftEncoder.clearCount();
-    rightEncoder.clearCount();
+
     setSpeeds(TURN_SPEED, -TURN_SPEED);  // pivot from right
     
     // Calculate minimum ticks before we start checking sensors
@@ -179,7 +175,7 @@ void Motors::turn_180_back_smart(Sensors& sensors) {
             
             // Check center sensors (S4 and S5 - indices 3 and 4)
             // For 180° turns, we want to catch the line coming from behind
-            if (sensorVals[1] || sensorVals[2] || sensorVals[3] || sensorVals[4]) {
+            if ((sensorVals[1] && sensorVals[2]) || (sensorVals[2] && sensorVals[3]) || (sensorVals[3] && sensorVals[4])) {
                 break;  // Exit early - line found! 
             }
         }
@@ -229,7 +225,7 @@ void Motors::clearEncoders() {
 // ========== WIFI TUNING METHODS ==========
 
 void Motors::updateTurn_90_Ticks(int ticks90) {
-    TICKS_FOR_90_DEG = constrain(ticks90, 50, 1000);
+    TICKS_FOR_90_DEG = constrain(ticks90, 25, 1000);
 }
 
 void Motors::updateTurn_180_Ticks(int ticks180) {
