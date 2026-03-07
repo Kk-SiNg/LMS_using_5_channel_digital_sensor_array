@@ -17,6 +17,8 @@ const float CENTER_POSITION = 3500.0;  // Center position on 8-sensor array
 
 Sensors::Sensors() {
     lastPosition = 0.0;
+    sensitivity = 0.45;  // ★ Default: no adjustment (most sensitive)
+
     // Initialize thresholds to a default value
     for (uint8_t i = 0; i < SensorCount; i++) {
         calibratedThresholds[i] = DEFAULT_THRESHOLD;  // Default fallback before calibration
@@ -39,35 +41,35 @@ void Sensors::setup() {
     
     // Calculate thresholds from calibration data
     calculateThresholds();
+    recalculateActiveThresholds();
 }
 
 void Sensors::printCalibration() {
     Serial.println("QTRX Calibration Values:");
     for (uint8_t i = 0; i < SensorCount; i++) {
-        Serial.print("Sensor ");
-        Serial.print(i);
-        Serial.print(": Min=");
-        Serial.print(qtr.calibrationOn.minimum[i]);
-        Serial.print(" Max=");
-        Serial.print(qtr.calibrationOn.maximum[i]);
-        Serial.print(" Threshold=");
-        Serial.println(calibratedThresholds[i]);
+        Serial.printf("Sensor %d: Min=%d Max=%d CalThresh=%d ActiveThresh=%d\n",
+            i, qtr.calibrationOn.minimum[i], qtr.calibrationOn.maximum[i],
+            calibratedThresholds[i], activeThresholds[i]);
     }
+    Serial.printf("Sensitivity: %.2f\n", sensitivity);
 }
 
 void Sensors::printCalibrationToClient(WiFiClient& client) {
     client.println("\n=== Calibration Thresholds ===");
-    client.println("Sensor | Min    | Max    | Threshold");
-    client.println("-------|--------|--------|----------");
+    client.printf("Sensitivity: %.2f (0=max sensitive, 1=least)\n", sensitivity);
+    client.println("Sensor | Min    | Max    | CalThr | ActiveThr");
+    client.println("-------|--------|--------|--------|----------");
     for (uint8_t i = 0; i < SensorCount; i++) {
-        client.printf("  S%-2d  | %-6d | %-6d | %-6d\n",
+        client.printf("  S%-2d  | %-6d | %-6d | %-6d | %-6d\n",
             i + 1,
             qtr.calibrationOn.minimum[i],
             qtr.calibrationOn.maximum[i],
-            calibratedThresholds[i]);
+            calibratedThresholds[i],
+            activeThresholds[i]);
     }
     client.println("==============================\n");
 }
+
 
 void Sensors::calculateThresholds() {
     // Calculate threshold for each sensor as the midpoint between min and max
@@ -96,6 +98,35 @@ void Sensors::calculateThresholds() {
     Serial.println("✓ Thresholds calculated from calibration data");
 }
 
+
+void Sensors::recalculateActiveThresholds() {
+    for (uint8_t i = 0; i < SensorCount; i++) {
+        uint16_t minVal = qtr.calibrationOn.minimum[i];
+        uint16_t midVal = calibratedThresholds[i];
+        
+        // Interpolate between midpoint and min
+        // sens=0 → use midpoint (default), sens=1 → use min (only strong white)
+        float range = (float)(midVal - minVal);
+        activeThresholds[i] = (uint16_t)(midVal - (sensitivity * range));
+        
+        // Safety: never go below min
+        if (activeThresholds[i] < minVal) {
+            activeThresholds[i] = minVal;
+        }
+    }
+}
+
+void Sensors::setSensitivity(float sens) {
+    sensitivity = constrain(sens, 0.0f, 1.0f);
+    recalculateActiveThresholds();
+}
+
+float Sensors::getSensitivity() {
+    return sensitivity;
+}
+
+
+
 // Read all 8 sensors as analog values (0-1000)
 // Higher values = more reflective (white line)
 void Sensors::readRaw(uint16_t* values) {
@@ -105,10 +136,8 @@ void Sensors::readDigital(bool* values) {
     uint16_t rawValues[8];
     qtr.read(rawValues);
     
-    // In RC mode: lower values = more reflective (white line)
-    // Values BELOW threshold indicate white line
     for (uint8_t i = 0; i < 8; i++) {
-        values[i] = (rawValues[i] < calibratedThresholds[i]);
+        values[i] = (rawValues[i] < activeThresholds[i]);  // ★ CHANGED
     }
 }
 
@@ -142,9 +171,8 @@ float Sensors::getLineError() {
 
 // ========== HELPER FUNCTIONS ==========
 bool Sensors::isLineDetected(uint16_t value, uint8_t sensorIndex) {
-    return (value < calibratedThresholds[sensorIndex]);
+    return (value < activeThresholds[sensorIndex]);  // ★ CHANGED
 }
-
 bool Sensors::onLine() {
     bool sensors[8];
     readDigital(sensors);
@@ -189,10 +217,10 @@ PathOptions Sensors::getAvailablePaths() {
     // Normal line = 2-3 sensors (as you described)
     if (activeCount >= 5) {
         // LEFT: S7 or S8 active
-        paths.left = (sensors[6] && sensors[7]);
+        paths.left = (sensors[5] && sensors[6] && sensors[7]);
         
         // RIGHT: S1 or S2 active
-        paths.right = (sensors[0] && sensors[1]);
+        paths.right = (sensors[0] && sensors[1] && sensors[2]);
         
         // STRAIGHT: S4 or S5 active (center)
         paths.straight = (sensors[3] && sensors[4]);

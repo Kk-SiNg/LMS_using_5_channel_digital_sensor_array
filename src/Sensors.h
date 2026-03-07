@@ -25,13 +25,12 @@ enum JunctionType {
     JUNCTION_90_RIGHT,
     JUNCTION_DEAD_END
 };
-
 class Sensors {
 public:
     Sensors();
     void setup();
     
-    float getLineError();  // Returns error in range -3500 to +3500 (0 = centered)
+    float getLineError();
     PathOptions getAvailablePaths();
     JunctionType classifyJunction(PathOptions paths);
     bool isLineEnd();
@@ -39,7 +38,7 @@ public:
     
     void readRaw(uint16_t* values);
     void readDigital(bool* values);
-    float getPosition();  // Returns position in range -7 to +7 (0 = centered) for backward compatibility
+    float getPosition();
     
     void getSensorArray(bool* arr);
     void getAnalogArray(uint16_t* arr);
@@ -50,17 +49,21 @@ public:
     
     int getActiveSensorCount();
 
+    // ★★★ Sensitivity control ★★★
+    void setSensitivity(float sens);   // 0.0 = max sensitive, 1.0 = least sensitive
+    float getSensitivity();
+
 private:
     QTRSensors qtr;
     uint16_t sensorValues[SensorCount];
-    uint16_t calibratedThresholds[SensorCount];  // Per-sensor calibrated thresholds
+    uint16_t calibratedThresholds[SensorCount];
+    uint16_t activeThresholds[SensorCount];  // ★ actual thresholds used (adjusted by sensitivity)
+    float sensitivity;                        // ★ 0.0 to 1.0
     
-    // Sensor weights: Right(-) to Left(+)
-    // S1   S2  S3  S4  S5  S6  S7  S8
-    // -7  -5  -3  -1  +1  +3  +5  +7
     const int8_t weights[8] = {-7, -5, -3, -1, 1, 3, 5, 7};
     float lastPosition;
     
     bool isLineDetected(uint16_t value, uint8_t sensorIndex);
     void calculateThresholds();
+    void recalculateActiveThresholds();  // ★ applies sensitivity to calibrated thresholds
 };

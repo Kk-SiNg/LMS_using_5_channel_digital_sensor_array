@@ -9,9 +9,9 @@
 #include <Arduino.h>
 
 // Define global tunable parameters can be changed externally via wifi
-int TICKS_FOR_90_DEG = 400;    //old 360
-int TICKS_FOR_180_DEG = 870;
-int TICKS_TO_CENTER = 75;       //old 100
+int TICKS_FOR_90_DEG = 450;    //old 360
+int TICKS_FOR_180_DEG = 800;
+int TICKS_TO_CENTER = 150;       //old 100
 int BASE_SPEED = 130;
 int TURN_SPEED = 125;
 int MAX_SPEED = 200;
@@ -31,7 +31,7 @@ void Motors::setup() {
     ledcAttachPin(MOTOR_L_PWMA, pwm_channel_left);
     ledcAttachPin(MOTOR_R_PWMB, pwm_channel_right);
     
-    puType pu_type = puType::up;
+    puType pu_type = puType::none;
     ESP32Encoder::useInternalWeakPullResistors = pu_type;
     leftEncoder.attachHalfQuad(ENCODER_L_A, ENCODER_L_B);
     rightEncoder.attachHalfQuad(ENCODER_R_A, ENCODER_R_B);
@@ -132,6 +132,7 @@ void Motors::turn_90_left_smart(Sensors& sensors) {
                 break;  // Exit early - line found!
             }
         }
+        yield();
         delay(1);
     }
     stopBrake();
@@ -156,6 +157,7 @@ void Motors::turn_90_right_smart(Sensors& sensors) {
                 break;  // Exit early - line found!
             }
         }
+        yield();
         delay(1);
     }
     stopBrake();
@@ -181,6 +183,7 @@ void Motors::turn_180_back_smart(Sensors& sensors) {
                 break;  // Exit early - line found! 
             }
         }
+        yield();
         delay(1);
     }
     stopBrake();
@@ -198,7 +201,10 @@ void Motors::moveForward(int ticks) {
     leftEncoder.clearCount();
     rightEncoder.clearCount();
     setSpeeds(BASE_SPEED, BASE_SPEED);
-    while ((leftEncoder.getCount() + rightEncoder.getCount()) / 2 < ticks) delay(1);
+    while ((leftEncoder.getCount() + rightEncoder.getCount()) / 2 < ticks) {
+        yield();
+        delay(1);
+    }
 
     stopBrake();
 }

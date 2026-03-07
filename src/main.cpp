@@ -39,22 +39,22 @@ float lastError = 0;
 float integral = 0;
 float maxIntegral = 500000;  // Scaled for new error range (1000 * 500). Adjust if enabling Ki.
 
-int baseSpeed = 120;    // general base speed for normal runs
-int maxSpeed = 130;     //max speed during run
-int highSpeed = 125;  // For solving case
+int baseSpeed = 60;    // general base speed for normal runs
+int maxSpeed = 70;     //max speed during run
+int highSpeed = 140;  // For solving case
 
 //Addition
 int junction_identification_delay = 0; //move these many ticks to reverify junction and get available paths
 int line_end_confirmation_ticks = 5;
 
 // Delays
-int delayBeforeCenter = 65;
-int delayAfterCenter = 75;
-int dl1 = 200;
-int dl2 = 500;
-int dl3 = 150;
-int dl4 = 450;
-int dl5 = 250;
+int delayBeforeCenter = 1000;
+int delayAfterCenter = 1000;
+int dl1 = 1000;
+int dl2 = 1000;
+int dl3 = 1000;
+int dl4 = 1000;
+int dl5 = 1000;
 
 // // Alignment correction
 // int adjusted_speed = 100;
@@ -372,6 +372,7 @@ void loop() {
                     long segmentTicks = motors.getAverageCount();
                     
                     motors.stopBrake();
+                    delay(5000);
                     
                     // Continuous path detection for 50ms WITHOUT PID (to avoid drift)
                     unsigned long detectionStartTime = millis();
@@ -383,7 +384,7 @@ void loop() {
                     // Track starting position for the 50ms sampling movement
                     long samplingStartTicks = motors.getAverageCount();
                     
-                    while (millis() - detectionStartTime < 170) {  // 50ms continuous detection
+                    while (millis() - detectionStartTime < 100) {  // 50ms continuous detection
                         // Just move straight slowly, NO PID correction
                         motors.setSpeeds(80, 80);  // Equal speeds = straight movement
                         
@@ -393,6 +394,7 @@ void loop() {
                         if (sample.straight) straightDetections++;
                         totalSamples++;
                         
+                        yield();
                         delay(3);  // Sample every 5ms
                     }
                     
@@ -450,10 +452,12 @@ void loop() {
                     if (client && client.connected()) client.println("Executing ticks to center");
                     motors.moveForward(TICKS_TO_CENTER);
                     motors.stopBrake();
+                    yield();
                     
                     if (client && client.connected()) client.println("Delaying after center");
                     delay(delayAfterCenter);
-                    
+                    yield();
+
                     // Calculate total segment length
                     long totalSegmentLength = segmentTicks + samplingTicks + junction_identification_delay + TICKS_TO_CENTER;
 
@@ -549,6 +553,7 @@ void loop() {
                     integral = 0;
                     lastJunctionTime = millis();
                     delay(dl1);
+                    yield();
                 }
                 else if (sensors.isLineEnd()) {
                         
@@ -1265,9 +1270,42 @@ void processCommand(String cmd) {
         client.printf("Finish: %s\n", sensors.isEndPoint() ? "YES" : "NO");
         client.println("==================\n");
     }
+
+    //sensing
     else if (cmd == "CAL") {
         sensors.printCalibrationToClient(client);
     }
+    else if (cmd == "RAW") {
+        uint16_t rawValues[8];
+        bool digital[8];
+        sensors.readRaw(rawValues);
+        sensors.readDigital(digital);
+        
+        client.println("\n=== Raw Sensor Readings ===");
+        client.print("Digital: [");
+        for (int i = 0; i < 8; i++) {
+            client.print(digital[i] ? "█" : "·");
+        }
+        client.println("]");
+        client.println("Sensor | Raw    | Detected");
+        client.println("-------|--------|----------");
+        for (int i = 0; i < 8; i++) {
+            client.printf("  S%-2d  | %-6d | %s\n", i+1, rawValues[i], digital[i] ? "LINE" : "-");
+        }
+        client.printf("Sensitivity: %.2f\n", sensors.getSensitivity());
+        client.println("===========================\n");
+    }
+    else if (cmd.startsWith("SENS ")) {
+        float sens = cmd.substring(5).toFloat();
+        sensors.setSensitivity(sens);
+        client.printf("✓ Sensitivity = %.2f\n", sensors.getSensitivity());
+        client.println("  0.00 = most sensitive (default)");
+        client.println("  1.00 = least sensitive (only strong white)");
+        // Show what happened to thresholds
+        sensors.printCalibrationToClient(client);
+    }
+
+    //pid
     else if (cmd == "PID") {
         client.println("\n=== PID Values ===");
         client.printf("Kp = %.2f\n", Kp);
@@ -1292,6 +1330,9 @@ void printMenu() {
     client.println("PATH - Show path info");
     client.println("DEBOUNCE - Show debounce info");
     client.println("TEST - Test sensors");
+    client.println("=== Sensitivity ===");
+    client.println("SENS <0.0-1.0> - Set sensitivity (0=max, 1=min)");
+    client.println("RAW  - Show raw sensor readings");
     client.println("CAL  - Show calibration thresholds");
     client.println("PID - Show PID values");
     client.println("");
