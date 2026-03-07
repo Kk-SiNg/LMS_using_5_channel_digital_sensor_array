@@ -1178,12 +1178,34 @@ void processCommand(String cmd) {
         Motors::updateTurn_180_Ticks(ticks);
         client.printf("✓ Turn 180° Ticks = %d\n", ticks);
     }
+    else if (cmd.startsWith("BLIND90 ")) {
+        int ms = cmd.substring(8).toInt();
+        BLIND_TURN_MS_90 = constrain(ms, 0, 500);
+        client.printf("✓ Blind turn time = %dms\n", BLIND_TURN_MS_90);
+    }
+    else if (cmd.startsWith("BLIND180 ")) {
+        int ms = cmd.substring(9).toInt();
+        BLIND_TURN_MS_180 = constrain(ms, 0, 500);
+        client.printf("✓ Blind turn time = %dms\n", BLIND_TURN_MS_180);
+    }
+    else if (cmd.startsWith("TIMER90 ")) {
+        int ms = cmd.substring(8).toInt();
+        TURN_TIMER_90 = constrain(ms, 0, 500);
+        client.printf("✓ Blind turn time = %dms\n", TURN_TIMER_90);
+    }
+    else if (cmd.startsWith("TIMER180 ")) {
+        int ms = cmd.substring(9).toInt();
+        TURN_TIMER_180 = constrain(ms, 15, 500);
+        client.printf("✓ Blind turn time = %dms\n", TURN_TIMER_180);
+    }
+
     // NEW: Min turn percent tuning
     else if (cmd.startsWith("MINTP ")) {
         int percent = cmd.substring(6).toInt();
         Motors::updateMinTurnPercent(percent);
         client.printf("✓ Min Turn Percent = %d%%\n", MIN_TURN_PERCENT);
     }
+    
     // add state change
     else if (cmd.startsWith("WAIT")){
         currentState = WAIT_FOR_RUN_2;

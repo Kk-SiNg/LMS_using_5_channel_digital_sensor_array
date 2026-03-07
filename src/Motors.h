@@ -17,6 +17,10 @@ extern int BASE_SPEED;
 extern int TURN_SPEED;
 extern int MAX_SPEED;
 extern int MIN_TURN_PERCENT;  // Minimum % of ticks before sensor check kicks in
+extern int BLIND_TURN_MS_90;
+extern int BLIND_TURN_MS_180;
+extern int TURN_TIMER_90;
+extern int TURN_TIMER_180;
 
 
 class Motors {
@@ -53,6 +57,10 @@ public:
     static void updateSpeeds(int base, int turn, int max);
 
     static void updateMinTurnPercent(int percent);
+    static void updateBlindTurnMs_180(int ms);
+    static void updateBlindTurnMs_90(int ms);
+    static void updateTurn_timer_90(int ms);
+    static void update_turn_timer_180(int ms);
 
 private:
     const int pwm_channel_left = 0;

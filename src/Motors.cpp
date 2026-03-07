@@ -16,6 +16,10 @@ int BASE_SPEED = 130;
 int TURN_SPEED = 125;
 int MAX_SPEED = 200;
 int MIN_TURN_PERCENT = 80;  // Start checking sensors after 65% of turn complete
+int BLIND_TURN_MS_90 = 150;
+int BLIND_TURN_MS_180 = 300;
+int TURN_TIMER_90 = 150;
+int TURN_TIMER_180 = 300;
 
 Motors::Motors() {}
 
@@ -117,8 +121,10 @@ void Motors::turn_90_left_smart(Sensors& sensors) {
     
     // Calculate minimum ticks before we start checking sensors
     long minTicks = (TICKS_FOR_90_DEG * MIN_TURN_PERCENT) / 100;
-    
-    while (rightEncoder.getCount() < TICKS_FOR_90_DEG) {
+    delay(BLIND_TURN_MS_90);
+    unsigned long timeout = millis();
+
+    while ((rightEncoder.getCount() < TICKS_FOR_90_DEG) && (millis() - timeout < TURN_TIMER_90)) {
         // After minimum ticks, check if center sensors see the line
         if (rightEncoder.getCount() >= minTicks) {
             bool sensorVals[8];
@@ -142,8 +148,10 @@ void Motors::turn_90_right_smart(Sensors& sensors) {
     
     // Calculate minimum ticks before we start checking sensors
     long minTicks = (TICKS_FOR_90_DEG * MIN_TURN_PERCENT) / 100;
+    delay(BLIND_TURN_MS_90);
+    unsigned long timeout = millis();
     
-    while (leftEncoder.getCount() < TICKS_FOR_90_DEG) {
+    while ((leftEncoder.getCount() < TICKS_FOR_90_DEG) && (millis() - timeout < TURN_TIMER_90)) {
         // After minimum ticks, check if center sensors see the line
         if (leftEncoder.getCount() >= minTicks) {
             bool sensorVals[8];
@@ -166,8 +174,10 @@ void Motors::turn_180_back_smart(Sensors& sensors) {
     
     // Calculate minimum ticks before we start checking sensors
     long minTicks = (TICKS_FOR_180_DEG * MIN_TURN_PERCENT) / 100;
+    delay(BLIND_TURN_MS_180);
+    unsigned long timeout = millis();
     
-    while (leftEncoder.getCount() < TICKS_FOR_180_DEG) {
+    while ((leftEncoder.getCount() < TICKS_FOR_180_DEG) && (millis() - timeout < TURN_TIMER_180)) {
         // After minimum ticks, check if center sensors see the line
         if (leftEncoder.getCount() >= minTicks) {
             bool sensorVals[8];
@@ -244,4 +254,17 @@ void Motors::updateSpeeds(int base, int turn, int max) {
 
 void Motors::updateMinTurnPercent(int percent) {
     MIN_TURN_PERCENT = constrain(percent, 30, 95);
+}
+
+void Motors::updateBlindTurnMs_90(int ms) {
+    BLIND_TURN_MS_90 = constrain(ms, 0, 500);
+}
+void Motors::updateBlindTurnMs_180(int ms) {
+    BLIND_TURN_MS_180 = constrain(ms, 0, 500);
+}
+void Motors::updateTurn_timer_90(int ms) {
+    TURN_TIMER_90 = constrain(ms, 0, 500);
+}
+void Motors::update_turn_timer_180(int ms) {
+    TURN_TIMER_180 = constrain(ms, 15, 500);
 }
