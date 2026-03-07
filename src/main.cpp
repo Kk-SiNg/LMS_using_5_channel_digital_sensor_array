@@ -372,7 +372,7 @@ void loop() {
                     long segmentTicks = motors.getAverageCount();
                     
                     motors.stopBrake();
-                    delay(5000);
+                    delay(1);
                     
                     // Continuous path detection for 50ms WITHOUT PID (to avoid drift)
                     unsigned long detectionStartTime = millis();
@@ -384,18 +384,18 @@ void loop() {
                     // Track starting position for the 50ms sampling movement
                     long samplingStartTicks = motors.getAverageCount();
                     
-                    while (millis() - detectionStartTime < 100) {  // 50ms continuous detection
+                    while (millis() - detectionStartTime < 100) {  // 100ms continuous detection
                         // Just move straight slowly, NO PID correction
                         motors.setSpeeds(80, 80);  // Equal speeds = straight movement
                         
-                        PathOptions sample = sensors.getAvailablePaths();
+                        PathOptions sample = sensors.getAvailablePaths_2();
                         if (sample.left) leftDetections++;
                         if (sample.right) rightDetections++;
                         if (sample.straight) straightDetections++;
                         totalSamples++;
                         
                         yield();
-                        delay(3);  // Sample every 5ms
+                        delay(3);  // Sample every 3ms
                     }
                     
                     motors.stopBrake();
@@ -427,14 +427,14 @@ void loop() {
                                     paths.left, paths.straight, paths.right);
                     }
                     
-                    // Move forward additional amount if needed (junction_identification_delay)
-                    if (junction_identification_delay > 0) {
-                        if (client && client.connected()) {
-                            client.printf("Moving forward by %d ticks\n", junction_identification_delay);
-                        }
-                        motors.moveForward(junction_identification_delay);
-                        motors.stopBrake();
-                    }
+                    // // Move forward additional amount if needed (junction_identification_delay)
+                    // if (junction_identification_delay > 0) {
+                    //     if (client && client.connected()) {
+                    //         client.printf("Moving forward by %d ticks\n", junction_identification_delay);
+                    //     }
+                    //     motors.moveForward(junction_identification_delay);
+                    //     motors.stopBrake();
+                    // }
                     
                     if (client && client.connected()) client.println("Taking delay before centering");
                     delay(delayBeforeCenter);
@@ -454,7 +454,7 @@ void loop() {
                     motors.stopBrake();
                     yield();
                     
-                    if (client && client.connected()) client.println("Delaying after center");
+                    if (client && client.connected()) client.println("Taking Delaying after center");
                     delay(delayAfterCenter);
                     yield();
 
@@ -514,7 +514,7 @@ void loop() {
                     sensors.getSensorArray(sensorVals);
                     
                     // === LSRB Logic:  Left > Straight > Right > Back ===
-                    if (paths. left) {
+                    if (paths.left) {
                         if (client && client.connected()) client.println("  → Taking LEFT");
                         motors.turn_90_left_smart(sensors);
                         rawPath += 'L';
@@ -1119,6 +1119,10 @@ void processCommand(String cmd) {
         highSpeed = cmd.substring(10).toInt();
         highSpeed = constrain(highSpeed, 50, maxSpeed);
         client.printf("✓ High Speed = %d\n", highSpeed);
+    }
+    else if(cmd.startsWith("MAXSPEED ")){
+        maxSpeed = cmd.substring(8).toInt();
+        client.printf("Max speed = %d\n", maxSpeed);
     }
     else if (cmd.startsWith("JUNCTIONDB ")) {
         junctionDebounce = cmd.substring(11).toInt();

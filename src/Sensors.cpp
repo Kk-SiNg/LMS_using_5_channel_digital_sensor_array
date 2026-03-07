@@ -235,6 +235,43 @@ PathOptions Sensors::getAvailablePaths() {
     return paths;
 }
 
+
+PathOptions Sensors::getAvailablePaths_2() {
+    bool sensors[8];
+    readDigital(sensors);
+    
+    PathOptions paths;
+    
+    // Count active sensors (detecting white line)
+    int activeCount = 0;
+    for (int i = 0; i < 8; i++) {
+        if (sensors[i]) activeCount++;
+    }
+    
+    // Junction = 5 or more sensors active
+    // Normal line = 2-3 sensors (as you described)
+    if (activeCount >= 5) {
+        // LEFT: S7 or S8 active
+        paths.left = (sensors[6] && sensors[7]);
+        
+        // RIGHT: S1 or S2 active
+        paths.right = (sensors[0] && sensors[1]);
+        
+        // STRAIGHT: S4 or S5 active (center)
+        paths.straight = (sensors[3] && sensors[4]);
+    }
+    else {
+        // Normal line - not a junction (2-3 sensors)
+        paths.left = false;
+        paths.right = false;
+        paths.straight = (activeCount > 0);
+    }
+    
+    return paths;
+}
+
+
+
 JunctionType Sensors::classifyJunction(PathOptions paths) {
     int pathCount = 0;
     if (paths.left) pathCount++;

@@ -32,6 +32,7 @@ public:
     
     float getLineError();
     PathOptions getAvailablePaths();
+    PathOptions getAvailablePaths_2();
     JunctionType classifyJunction(PathOptions paths);
     bool isLineEnd();
     bool isEndPoint();
