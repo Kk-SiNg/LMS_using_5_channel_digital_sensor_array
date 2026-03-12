@@ -9,17 +9,17 @@
 #include <Arduino.h>
 
 // Define global tunable parameters can be changed externally via wifi
-int TICKS_FOR_90_DEG = 450;    //old 360
-int TICKS_FOR_180_DEG = 800;
-int TICKS_TO_CENTER = 150;       //old 100
+int TICKS_FOR_90_DEG = 265;    //old 360
+int TICKS_FOR_180_DEG = 720;
+int TICKS_TO_CENTER = 26;       //old 100
 int BASE_SPEED = 130;
 int TURN_SPEED = 125;
 int MAX_SPEED = 200;
 int MIN_TURN_PERCENT = 80;  // Start checking sensors after 65% of turn complete
-int BLIND_TURN_MS_90 = 150;
-int BLIND_TURN_MS_180 = 300;
-int TURN_TIMER_90 = 150;
-int TURN_TIMER_180 = 300;
+int BLIND_TURN_MS_90 = 0;
+int BLIND_TURN_MS_180 = 0;
+int TURN_TIMER_90 = 2000;
+int TURN_TIMER_180 = 2000;
 
 Motors::Motors() {}
 
@@ -121,10 +121,10 @@ void Motors::turn_90_left_smart(Sensors& sensors) {
     
     // Calculate minimum ticks before we start checking sensors
     long minTicks = (TICKS_FOR_90_DEG * MIN_TURN_PERCENT) / 100;
-    delay(BLIND_TURN_MS_90);
-    unsigned long timeout = millis();
+    // delay(BLIND_TURN_MS_90);
+    // unsigned long timeout = millis();
 
-    while ((rightEncoder.getCount() < TICKS_FOR_90_DEG) && (millis() - timeout < TURN_TIMER_90)) {
+    while ((rightEncoder.getCount() < TICKS_FOR_90_DEG)) {
         // After minimum ticks, check if center sensors see the line
         if (rightEncoder.getCount() >= minTicks) {
             bool sensorVals[8];
@@ -148,10 +148,10 @@ void Motors::turn_90_right_smart(Sensors& sensors) {
     
     // Calculate minimum ticks before we start checking sensors
     long minTicks = (TICKS_FOR_90_DEG * MIN_TURN_PERCENT) / 100;
-    delay(BLIND_TURN_MS_90);
-    unsigned long timeout = millis();
+    // delay(BLIND_TURN_MS_90);
+    // unsigned long timeout = millis();
     
-    while ((leftEncoder.getCount() < TICKS_FOR_90_DEG) && (millis() - timeout < TURN_TIMER_90)) {
+    while ((leftEncoder.getCount() < TICKS_FOR_90_DEG)) {
         // After minimum ticks, check if center sensors see the line
         if (leftEncoder.getCount() >= minTicks) {
             bool sensorVals[8];

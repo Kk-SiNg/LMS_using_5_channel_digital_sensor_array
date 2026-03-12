@@ -39,8 +39,8 @@ float lastError = 0;
 float integral = 0;
 float maxIntegral = 500000;  // Scaled for new error range (1000 * 500). Adjust if enabling Ki.
 
-int baseSpeed = 70;    // general base speed for normal runs
-int maxSpeed = 90;     //max speed during run
+int baseSpeed = 90;    // general base speed for normal runs
+int maxSpeed = 140;     //max speed during run
 int highSpeed = 140;  // For solving case
 
 //Addition
@@ -48,8 +48,8 @@ int junction_identification_delay = 0; //move these many ticks to reverify junct
 int line_end_confirmation_ticks = 5;
 
 // Delays
-int delayBeforeCenter = 1000;
-int delayAfterCenter = 1000;
+int delayBeforeCenter = 200;
+int delayAfterCenter = 200;
 int dl1 = 1000;
 int dl2 = 1000;
 int dl3 = 1000;
@@ -66,7 +66,7 @@ int dl5 = 1000;
 // int extra_ticks = 0;
 
 // === Junction Settings ===
-unsigned long junctionDebounce = 120;  // ms between junction detections
+unsigned long junctionDebounce = 70;  // ms between junction detections
 unsigned long lastJunctionTime = 0;
 int junctionCount = 0;
 
@@ -175,7 +175,9 @@ void setup() {
             if (digitalRead(USER_BUTTON) == LOW || robotRunning) break;
         }
     }
+    delay(2000);
     currentState = CALIBRATING;
+
     motors.rotate();
     sensors.setup();
     motors.stopBrake();
@@ -364,24 +366,35 @@ void loop() {
                 
                 // Is this a junction?  (more than just straight OR only left/right)
                 bool isJunction_check_1 = (pathCount > 1) || (pathCount == 1 && !pathsA1.straight);
-                bool isjunction_check_2 = 0;    
+                bool isjunction_check_2 = 0;
+                int leftDetections = 0;
+                int rightDetections = 0;
+                int straightDetections = 0;
                 if(isJunction_check_1){
                     int confirmations = 0;
-                    for (int i = 0; i < 5; i++) {  // Take 5 quick samples
+                    for (int i = 0; i < 10; i++) {  // Take 10 quick samples
                         PathOptions p = sensors.getAvailablePaths();
                         int pc = 0;
-                        if (p.left) pc++;
-                        if (p.right) pc++;
-                        if (p.straight) pc++;
+                        if (p.left) {
+                            pc++;
+                            leftDetections++;
+                        }
+                        if (p.right) {
+                            pc++;
+                            rightDetections++;
+                        }
+                        if (p.straight) {
+                            pc++;
+                            straightDetections++;
+                        }
                         if ((pc > 1) || (pc == 1 && !p.straight)) {
                             confirmations++;
                         }
-                        delayMicroseconds(500);  // 0.5ms between samples
+                        delayMicroseconds(1000);  // 1ms between samples
                     }
-                    if(confirmations > 3) isjunction_check_2 = true;
+                    if(confirmations >= 6) isjunction_check_2 = true;
                     else isjunction_check_2 = false;
                 }
-                    
 
                 // if (client && client.connected()) client.printf("leftA: %d, rightA: %d \n", pathsA.left, pathsA.right);
                 // if (client && client.connected()) client.println();
@@ -394,9 +407,6 @@ void loop() {
                     
                     // Continuous path detection for 100ms WITHOUT PID (to avoid drift)
                     unsigned long detectionStartTime = millis();
-                    int leftDetections = 0;
-                    int rightDetections = 0;
-                    int straightDetections = 0;
                     int totalSamples = 0;
                     
                     // Track starting position for the 100ms sampling movement
@@ -404,7 +414,7 @@ void loop() {
                     
                     while (millis() - detectionStartTime < 100) {  // 100ms continuous detection
                         // Just move straight slowly, NO PID correction
-                        motors.setSpeeds(80, 80);  // Equal speeds = straight movement
+                        motors.setSpeeds(60, 60);  // Equal speeds = straight movement
                         
                         PathOptions sample = sensors.getAvailablePaths_2();
                         if (sample.left) leftDetections++;
@@ -413,7 +423,7 @@ void loop() {
                         totalSamples++;
                         
                         yield();
-                        delay(3);  // Sample every 3ms
+                        delay(1);  // Sample every 3ms
                     }
                     
                     motors.stopBrake();
@@ -430,12 +440,12 @@ void loop() {
                     
                     // Combine results with confidence threshold
                     PathOptions paths;
-                    float leftConfidence = (totalSamples > 0) ? (float)leftDetections / totalSamples : 0;
-                    float rightConfidence = (totalSamples > 0) ? (float)rightDetections / totalSamples : 0;
-                    float straightConfidence = (totalSamples > 0) ? (float)straightDetections / totalSamples : 0;
+                    float leftConfidence = (totalSamples > 0) ? (float)leftDetections / (totalSamples+10) : 0;
+                    float rightConfidence = (totalSamples > 0) ? (float)rightDetections / (totalSamples+10) : 0;
+                    float straightConfidence = (totalSamples > 0) ? (float)straightDetections / (totalSamples+10) : 0;
                     
-                    paths.left = (leftConfidence >= 0.1);  // 10% confidence threshold
-                    paths.right = (rightConfidence >= 0.1);
+                    paths.left = (leftConfidence >= 0.185);  // 5.5% confidence threshold
+                    paths.right = (rightConfidence >= 0.185);
                     paths.straight = (straightConfidence >= 0.85);  // 85% confidence threshold
                     
                     if (client && client.connected()) {
@@ -1145,7 +1155,7 @@ void processCommand(String cmd) {
     }
     else if (cmd.startsWith("JUNCTIONDB ")) {
         junctionDebounce = cmd.substring(11).toInt();
-        junctionDebounce = constrain(junctionDebounce, 100, 1000);
+        junctionDebounce = constrain(junctionDebounce, 80, 1000);
         client.printf("✓ Base Junction Debounce = %lums (Dynamic DB now: %lums)\n", 
                     junctionDebounce, getDynamicDebounce());
     }
