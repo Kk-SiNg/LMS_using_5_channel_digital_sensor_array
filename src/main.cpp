@@ -32,24 +32,30 @@ PathOptimization optimizer;
 // Updated for 0-7000 position range (error range: -3500 to +3500)
 // Previous values for -7 to +7 range: Kp=15.0, Ki=0.0, Kd=0.7
 // New values scaled down by 500x to maintain similar behavior
-float Kp = 0.03;    // Proportional gain (15.0 / 500)
-float Ki = 0.0;     // Integral gain (start with 0)
-float Kd = 0.0014;  // Derivative gain (0.7 / 500)
+double Kp = 0.022; // 0.03   // Proportional gain (15.0 / 500)
+double Ki = 0.0003; // 0    // Integral gain (start with 0)
+double Kd = 0.024; // 0.014  // Derivative gain (0.7 / 500)
 float lastError = 0;
 float integral = 0;
 float maxIntegral = 500000;  // Scaled for new error range (1000 * 500). Adjust if enabling Ki.
 
-int baseSpeed = 90;    // general base speed for normal runs
-int maxSpeed = 140;     //max speed during run
-int highSpeed = 140;  // For solving case
+int baseSpeed = 80;    // general base speed for normal runs
+int maxSpeed = 115;     //max speed during run
+int highSpeed = 115;  // For solving case
 
 //Addition
 int junction_identification_delay = 0; //move these many ticks to reverify junction and get available paths
 int line_end_confirmation_ticks = 5;
+int sample_rate = 13;
+
+// Confidence
+float LEFT_CONFIDENCE = 0.25;
+float RIGHT_CONFIDENCE = 0.25;
+float STRAIGHT_CONFIDENCE = 0.85;
 
 // Delays
-int delayBeforeCenter = 200;
-int delayAfterCenter = 200;
+int delayBeforeCenter = 300;
+int delayAfterCenter = 400;
 int dl1 = 1000;
 int dl2 = 1000;
 int dl3 = 1000;
@@ -66,14 +72,14 @@ int dl5 = 1000;
 // int extra_ticks = 0;
 
 // === Junction Settings ===
-unsigned long junctionDebounce = 70;  // ms between junction detections
+unsigned long junctionDebounce = 50;  // ms between junction detections
 unsigned long lastJunctionTime = 0;
 int junctionCount = 0;
 
 // === PATH SAVING CONSTANTS ===
 #define MAX_PATH_LENGTH 100
 
-int SLOWDOWN_TICKS = 85;  // Ticks before junction to slow down in optimized run
+int SLOWDOWN_TICKS = 30;  // Ticks before junction to slow down in optimized run
 
 // === PATH STORAGE ===
 String rawPath = "";
@@ -186,7 +192,7 @@ void setup() {
     Serial.println("╔════════════════════════════════════════╗");
     Serial.println("║  Configuration                         ║");
     Serial.println("╠════════════════════════════════════════╣");
-    Serial.printf("║  PID: Kp=%.1f Ki=%.1f Kd=%.1f          ║\n", Kp, Ki, Kd);
+    Serial.printf("║  PID: Kp=%.5f Ki=%.5f Kd=%.5f          ║\n", Kp, Ki, Kd);
     Serial.printf("║  Base Speed: %d  High Speed: %d      ║\n", BASE_SPEED, highSpeed);
     Serial.printf("║  Junction Debounce: %lums              ║\n", junctionDebounce);
     Serial.printf("║  TICKS_90° = %d  Center = %d         ║\n", TICKS_FOR_90_DEG, TICKS_TO_CENTER);
@@ -371,8 +377,11 @@ void loop() {
                 int rightDetections = 0;
                 int straightDetections = 0;
                 if(isJunction_check_1){
+                    motors.stopBrake();
+                    delay(5000);
+                    motors.setSpeeds(80,80);
                     int confirmations = 0;
-                    for (int i = 0; i < 10; i++) {  // Take 10 quick samples
+                    for (int i = 0; i < 20; i++) {  // Take 10 quick samples
                         PathOptions p = sensors.getAvailablePaths();
                         int pc = 0;
                         if (p.left) {
@@ -390,11 +399,14 @@ void loop() {
                         if ((pc > 1) || (pc == 1 && !p.straight)) {
                             confirmations++;
                         }
-                        delayMicroseconds(1000);  // 1ms between samples
+                        delayMicroseconds(3000);  // 3ms between samples
                     }
-                    if(confirmations >= 6) isjunction_check_2 = true;
+                    if(confirmations >= sample_rate) isjunction_check_2 = true;
                     else isjunction_check_2 = false;
                 }
+                motors.stopBrake();
+                delay(5000);
+                runPID(baseSpeed);
 
                 // if (client && client.connected()) client.printf("leftA: %d, rightA: %d \n", pathsA.left, pathsA.right);
                 // if (client && client.connected()) client.println();
@@ -412,7 +424,7 @@ void loop() {
                     // Track starting position for the 100ms sampling movement
                     long samplingStartTicks = motors.getAverageCount();
                     
-                    while (millis() - detectionStartTime < 100) {  // 100ms continuous detection
+                    while (millis() - detectionStartTime < 60) {  // 100ms continuous detection
                         // Just move straight slowly, NO PID correction
                         motors.setSpeeds(60, 60);  // Equal speeds = straight movement
                         
@@ -440,13 +452,13 @@ void loop() {
                     
                     // Combine results with confidence threshold
                     PathOptions paths;
-                    float leftConfidence = (totalSamples > 0) ? (float)leftDetections / (totalSamples+10) : 0;
-                    float rightConfidence = (totalSamples > 0) ? (float)rightDetections / (totalSamples+10) : 0;
-                    float straightConfidence = (totalSamples > 0) ? (float)straightDetections / (totalSamples+10) : 0;
+                    float leftConfidence = (totalSamples > 0) ? (float)leftDetections / (totalSamples+20) : 0;
+                    float rightConfidence = (totalSamples > 0) ? (float)rightDetections / (totalSamples+20) : 0;
+                    float straightConfidence = (totalSamples > 0) ? (float)straightDetections / (totalSamples+20) : 0;
                     
-                    paths.left = (leftConfidence >= 0.185);  // 5.5% confidence threshold
-                    paths.right = (rightConfidence >= 0.185);
-                    paths.straight = (straightConfidence >= 0.85);  // 85% confidence threshold
+                    paths.left = (leftConfidence >= LEFT_CONFIDENCE);  // 5.5% confidence threshold | changes << nikhil
+                    paths.right = (rightConfidence >= RIGHT_CONFIDENCE);
+                    paths.straight = (straightConfidence >= STRAIGHT_CONFIDENCE);  // 85% confidence threshold
                     
                     if (client && client.connected()) {
                         client.printf("Path confidence - L:  %.0f%%, S: %. 0f%%, R: %.0f%%\n",
@@ -827,8 +839,31 @@ void loop() {
                 if (pathsA.straight) pathCounter++;
                 
                 // Is this a junction?  (more than just straight OR only left/right)
-                bool isJunction = (pathCounter > 1) || (pathCounter == 1 && !pathsA.straight);
-                if(isJunction){
+                bool isJunction_a = (pathCounter > 1) || (pathCounter == 1 && !pathsA.straight);
+                bool isJunction_b = 0;
+                if(isJunction_a){
+                    int confirmations = 0;
+                    for (int i = 0; i < 10; i++) {  // Take 10 quick samples
+                        PathOptions p = sensors.getAvailablePaths();
+                        int pc = 0;
+                        if (p.left) {
+                            pc++;
+                        }
+                        if (p.right) {
+                            pc++;
+                        }
+                        if (p.straight) {
+                            pc++;
+                        }
+                        if ((pc > 1) || (pc == 1 && !p.straight)) {
+                            confirmations++;
+                        }
+                        delayMicroseconds(1000);  // 1ms between samples
+                    }
+                    if(confirmations >= 6) isJunction_b = true;
+                    else isJunction_b = false;
+                }
+                if(isJunction_a && isJunction_b){
                     motors.stopBrake();
                     solveState = SOLVE_SLOW_RUN;
                     delay(dl4);
@@ -844,7 +879,6 @@ void loop() {
                 solvePathIndex++;
                 solveState = SOLVE_TURN;
                 delay(dl5);
-                
             }
             else if (solveState == SOLVE_FINAL_RUN) {
                 runPID(baseSpeed);
@@ -1112,19 +1146,16 @@ void processCommand(String cmd) {
     
     // === PID TUNING ===
     else if (cmd.startsWith("KP ")) {
-        Kp = cmd.substring(3).toFloat();
-        client.printf("✓ Kp = %.2f\n", Kp);
-        Serial.printf("WiFi: Kp = %.2f\n", Kp);
+        Kp = cmd.substring(3).toDouble();
+        client.printf("✓ Kp = %.5f\n", Kp);
     }
     else if (cmd.startsWith("KI ")) {
-        Ki = cmd.substring(3).toFloat();
-        client.printf("✓ Ki = %.3f\n", Ki);
-        Serial.printf("WiFi: Ki = %.3f\n", Ki);
+        Ki = cmd.substring(3).toDouble();
+        client.printf("✓ Ki = %.5f\n", Ki);
     }
     else if (cmd.startsWith("KD ")) {
-        Kd = cmd.substring(3).toFloat();
-        client.printf("✓ Kd = %.2f\n", Kd);
-        Serial.printf("WiFi: Kd = %.2f\n", Kd);
+        Kd = cmd.substring(3).toDouble();
+        client.printf("✓ Kd = %.5f\n", Kd);
     }
     else if (cmd.startsWith("TUNE ")) {
         int s1 = cmd.indexOf(' ', 5);
@@ -1150,12 +1181,12 @@ void processCommand(String cmd) {
         client.printf("✓ High Speed = %d\n", highSpeed);
     }
     else if(cmd.startsWith("MAXSPEED ")){
-        maxSpeed = cmd.substring(8).toInt();
+        maxSpeed = cmd.substring(9).toInt();
         client.printf("Max speed = %d\n", maxSpeed);
     }
     else if (cmd.startsWith("JUNCTIONDB ")) {
-        junctionDebounce = cmd.substring(11).toInt();
-        junctionDebounce = constrain(junctionDebounce, 80, 1000);
+        junctionDebounce = cmd.substring(12).toInt(); // substring argument changed from 11 -> 12 << nikhil
+        junctionDebounce = constrain(junctionDebounce, 50, 1000); // base constraint changed from 80 to 50 << nikhil
         client.printf("✓ Base Junction Debounce = %lums (Dynamic DB now: %lums)\n", 
                     junctionDebounce, getDynamicDebounce());
     }
@@ -1233,13 +1264,6 @@ void processCommand(String cmd) {
         SLOWDOWN_TICKS = ticks;
         client.printf("✓ Slow_Down Ticks = %d\n", ticks);
     }
-
-    //solving state slow down
-    else if(cmd.startsWith("SLOW ")){
-        int ticks = cmd.substring(5).toInt(); 
-        SLOWDOWN_TICKS = ticks;
-        client.printf("SLOWDOWN_TICKS = %d\n", SLOWDOWN_TICKS);
-    }
     
 
     //addition for delays
@@ -1256,7 +1280,7 @@ void processCommand(String cmd) {
         client.println();
     }
     else if (cmd.startsWith("DL1 ")){
-        int dl = cmd.substring(3).toInt(); 
+        int dl = cmd.substring(4).toInt(); 
         dl1 = dl;
         client.printf("changed dl1: %d", dl);
         client.println();
@@ -1283,6 +1307,23 @@ void processCommand(String cmd) {
         int dl = cmd.substring(4).toInt(); 
         dl5 = dl;
         client.printf("changed dl4: %d", dl);
+        client.println();
+    }
+
+    // confidence tuning
+    else if (cmd.startsWith("CON ")) {
+        float input_conf = cmd.substring(4).toFloat();
+        LEFT_CONFIDENCE = input_conf;
+        RIGHT_CONFIDENCE = input_conf;
+        client.printf("Left and Right Confidence: %.4f", input_conf);
+        client.println();
+    }
+
+    //sampel_Rate tunin:-
+    else if(cmd.startsWith("SAM ")){
+        int x = cmd.substring(4).toInt();
+        sample_rate = x;
+        client.printf("smaple_rate: %d", sample_rate);
         client.println();
     }
 
@@ -1390,11 +1431,11 @@ void processCommand(String cmd) {
     //pid
     else if (cmd == "PID") {
         client.println("\n=== PID Values ===");
-        client.printf("Kp = %.2f\n", Kp);
-        client.printf("Ki = %.3f\n", Ki);
-        client.printf("Kd = %.2f\n", Kd);
-        client.printf("Last Error = %.2f\n", lastError);
-        client.printf("Integral = %.2f\n", integral);
+        client.printf("Kp = %.5f\n", Kp);
+        client.printf("Ki = %.5f\n", Ki);
+        client.printf("Kd = %.5f\n", Kd);
+        client.printf("Last Error = %.5f\n", lastError);
+        client.printf("Integral = %.5f\n", integral);
         client.println("==================\n");
     }
     else {
@@ -1451,7 +1492,7 @@ void printStatus() {
         case FINISHED: client.println("FINISHED"); break;
         default: client.println("CALIBRATING");
     }
-    client.printf("PID: Kp=%.1f Ki=%.2f Kd=%.1f\n", Kp, Ki, Kd);
+    client.printf("PID: Kp=%.5f Ki=%.5f Kd=%.5f\n", Kp, Ki, Kd);
     client.printf("Speed: Base=%d High=%d\n", baseSpeed, highSpeed);
     client.printf("Junction Debounce: Base=%lums Dynamic=%lums\n", 
                 junctionDebounce, getDynamicDebounce());

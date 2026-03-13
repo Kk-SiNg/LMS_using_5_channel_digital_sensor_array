@@ -215,10 +215,10 @@ PathOptions Sensors::getAvailablePaths() {
     // Also check for SPATIAL PATTERN, not just count
     if (activeCount >= 6) {
         // LEFT: outermost left sensors must be active
-        paths.left = (sensors[6] && sensors[7]);
+        paths.left = (sensors[5] && sensors[6] && sensors[7]);
         
         // RIGHT: outermost right sensors must be active  
-        paths.right = (sensors[0] && sensors[1]);
+        paths.right = (sensors[0] && sensors[1] && sensors[2]);
         
         // STRAIGHT: center sensors active
         paths.straight = (sensors[3] && sensors[4]);

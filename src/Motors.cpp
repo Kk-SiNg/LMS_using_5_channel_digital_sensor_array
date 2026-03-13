@@ -15,9 +15,9 @@ int TICKS_TO_CENTER = 26;       //old 100
 int BASE_SPEED = 130;
 int TURN_SPEED = 125;
 int MAX_SPEED = 200;
-int MIN_TURN_PERCENT = 80;  // Start checking sensors after 65% of turn complete
-int BLIND_TURN_MS_90 = 0;
-int BLIND_TURN_MS_180 = 0;
+int MIN_TURN_PERCENT = 65;  // Start checking sensors after 65% of turn complete
+int BLIND_TURN_MS_90 = 50;
+int BLIND_TURN_MS_180 = 50;
 int TURN_TIMER_90 = 2000;
 int TURN_TIMER_180 = 2000;
 
@@ -139,6 +139,14 @@ void Motors::turn_90_left_smart(Sensors& sensors) {
         yield();
         delay(1);
     }
+    int dl = millis();
+    while (millis() - dl < BLIND_TURN_MS_90){
+        bool sensorVals[8];
+        sensors.getSensorArray(sensorVals);
+        if ((sensorVals[0] && sensorVals[1]) || (sensorVals[1] && sensorVals[2]) || (sensorVals[2] && sensorVals[3]) || (sensorVals[3] && sensorVals[4]) || (sensorVals[4] && sensorVals[5]) || (sensorVals[5] && sensorVals[6]) || (sensorVals[6] && sensorVals[7])) {
+            break;  // Exit
+        }
+    }
     stopBrake();
 }
 
@@ -164,6 +172,14 @@ void Motors::turn_90_right_smart(Sensors& sensors) {
         }
         yield();
         delay(1);
+    }
+    int dl = millis();
+    while (millis() - dl < BLIND_TURN_MS_90){
+        bool sensorVals[8];
+        sensors.getSensorArray(sensorVals);
+        if ((sensorVals[0] && sensorVals[1]) || (sensorVals[1] && sensorVals[2]) || (sensorVals[2] && sensorVals[3]) || (sensorVals[3] && sensorVals[4]) || (sensorVals[4] && sensorVals[5]) || (sensorVals[5] && sensorVals[6]) || (sensorVals[6] && sensorVals[7])) {
+            break;  // Exit
+        }
     }
     stopBrake();
 }
@@ -191,6 +207,14 @@ void Motors::turn_180_back_smart(Sensors& sensors) {
         }
         yield();
         delay(1);
+    }
+    int dl = millis();
+    while (millis() - dl < BLIND_TURN_MS_180){
+        bool sensorVals[8];
+        sensors.getSensorArray(sensorVals);
+        if ((sensorVals[0] && sensorVals[1]) || (sensorVals[1] && sensorVals[2]) || (sensorVals[2] && sensorVals[3]) || (sensorVals[3] && sensorVals[4]) || (sensorVals[4] && sensorVals[5]) || (sensorVals[5] && sensorVals[6]) || (sensorVals[6] && sensorVals[7])) {
+            break;  // Exit
+        }
     }
     stopBrake();
 }
