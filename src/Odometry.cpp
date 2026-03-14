@@ -9,13 +9,13 @@
 
 Odometry::Odometry()
     : pLeftEnc(nullptr), pRightEnc(nullptr),
-      prevLeftCount(0), prevRightCount(0),
-      lastLeftDelta(0), lastRightDelta(0),
-      x(0), y(0), theta(0),
-      segmentDist(0),
-      linearVel(0), angularVel(0),
-      leftTickRate(0), rightTickRate(0),
-      lastUpdateUs(0)
+    prevLeftCount(0), prevRightCount(0),
+    lastLeftDelta(0), lastRightDelta(0),
+    x(0), y(0), theta(0),
+    segmentDist(0),
+    linearVel(0), angularVel(0),
+    leftTickRate(0), rightTickRate(0),
+    lastUpdateUs(0)
 {}
 
 void Odometry::begin(ESP32Encoder* leftEnc, ESP32Encoder* rightEnc) {
