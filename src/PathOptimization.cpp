@@ -1,115 +1,61 @@
 /*
  * PathOptimization.cpp
- * FIXED: Proper distance summation and memory usage
+ * LSRB path simplification.
+ * Segment distances are now in mm (float).
+ * When combining 3 segments, distances are properly summed.
  */
 
 #include "PathOptimization.h"
 
 PathOptimization::PathOptimization() {}
 
-void PathOptimization::optimize(String &path, long segments[], int &pathLength) {
-    // Build new path using temporary small buffer
+void PathOptimization::optimize(String &path, float segments[], int &pathLength) {
     String newPath = "";
-    newPath.reserve(pathLength + 1); // Pre-allocate
-    
-    long newSegments[100]; // Match main.cpp array size
+    newPath.reserve(pathLength + 1);
+
+    float newSegments[MAX_PATH_LENGTH];
     int newIndex = 0;
-    
+
     int i = 0;
     while (i < pathLength) {
-        // Check for 3-character optimization patterns
         if (i <= pathLength - 3) {
             String sub = path.substring(i, i + 3);
-            
-            // Sum the distances of the 3 segments being combined
-            
-            if (sub == "LBR") {
-                // Left + Back + Right = U-turn (Back)
-                newPath += 'B';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "LBS") {
-                // Left + Back + Straight = Right turn
-                newPath += 'R';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "RBL") {
-                // Right + Back + Left = U-turn (Back)
-                newPath += 'B';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "SBL") {
-                // Straight + Back + Left = Right turn
-                newPath += 'R';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "SBS") {
-                // Straight + Back + Straight = U-turn
-                newPath += 'B';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "LBL") {
-                // Left + Back + Left = Straight (180° + 180° cancel out)
-                newPath += 'S';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "RBR") {
-                // Right + Back + Right = Straight
-                newPath += 'S';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "SBR") {
-                // Straight + Back + Right = Left
-                newPath += 'L';
-                newSegments[newIndex] = segments[i+2];
-                i += 3;
-                newIndex++;
-                continue;
-            }
-            else if (sub == "RBS") {
-                // Right + Back + Straight = Left
-                newPath += 'L';
-                newSegments[newIndex] = segments[i+2];
+
+            // Combined distance: sum all 3 segments being merged
+            float combinedDist = segments[i] + segments[i+1] + segments[i+2];
+
+            char replacement = 0;
+
+            if      (sub == "LBR") replacement = 'B';
+            else if (sub == "LBS") replacement = 'R';
+            else if (sub == "RBL") replacement = 'B';
+            else if (sub == "SBL") replacement = 'R';
+            else if (sub == "SBS") replacement = 'B';
+            else if (sub == "LBL") replacement = 'S';
+            else if (sub == "RBR") replacement = 'S';
+            else if (sub == "SBR") replacement = 'L';
+            else if (sub == "RBS") replacement = 'L';
+
+            if (replacement) {
+                newPath += replacement;
+                newSegments[newIndex] = combinedDist;
                 i += 3;
                 newIndex++;
                 continue;
             }
         }
-        
-        // No optimization found, copy current segment
+
+        // No optimization, copy current
         newPath += path[i];
         newSegments[newIndex] = segments[i];
         i++;
         newIndex++;
     }
-    
-    // Copy back optimized path
+
+    // Copy back
     path = newPath;
     pathLength = newIndex;
-    
-    // Copy segment distances back
-    for(int k = 0; k < newIndex && k < 100; k++) {
+    for (int k = 0; k < newIndex && k < MAX_PATH_LENGTH; k++) {
         segments[k] = newSegments[k];
     }
 }

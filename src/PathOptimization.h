@@ -1,18 +1,17 @@
 /*
  * PathOptimization.h
- * Implements the LSRB path simplification algorithm.
- * Uses Arduino String class for safety and simplicity.
+ * LSRB path simplification with distances in mm.
  */
 
 #pragma once
-
-#include <Arduino.h> // Required for String class
+#include <Arduino.h>
+#include "Config.h"
 
 class PathOptimization {
 public:
     PathOptimization();
 
-    // Optimizes the path string and its corresponding segment lengths array in-place.
-    // pathLength is passed by reference and will be updated.
-    void optimize(String &path, long segments[100], int &pathLength);
+    // Optimizes the path string and its corresponding segment distances (mm).
+    // pathLength is updated in-place.
+    void optimize(String &path, float segments[], int &pathLength);
 };

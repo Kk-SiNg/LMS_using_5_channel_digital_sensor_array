@@ -1,269 +1,369 @@
-#include <Arduino.h>
 /*
- * IIT Bombay Mesmerize Line Follower
- * Fresh implementation with digital sensors
- * Simple PID + LSRB junction navigation
- * WITH PATH SAVING & OPTIMIZATION FEATURES
- * V3.1 - Corrected Dynamic Debouncing
+ * main.cpp
+ * Industrial-Grade Continuous PID Line Maze Solver
+ *
+ * Architecture:
+ *   Outer loop (steering PID): line sensor error → ΔV differential
+ *   Inner loop (velocity PID): per-wheel target mm/s → PWM
+ *   Junction detection: distance-confirmed (no stopping)
+ *   Path storage: LSRB with segment distances in mm
+ *   Fast run: pure continuous control via odometry + saved path
  */
 
+#include <Arduino.h>
 #include <WiFi.h>
+#include <QuickPID.h>
 #include "Pins.h"
+#include "Config.h"
 #include "Sensors.h"
 #include "Motors.h"
+#include "Odometry.h"
 #include "PathOptimization.h"
 
-// Access motor tick parameters for WiFi tuning
-extern int TICKS_TO_CENTER;
-extern int TICKS_FOR_90_DEG;
-extern int MIN_TURN_PERCENT;
-
-
-// === WiFi Server ===
+// =====================================================================
+//  WiFi
+// =====================================================================
 WiFiServer server(TELNET_PORT);
 WiFiClient client;
 
-// === Global Objects ===
-Sensors sensors;
-Motors motors;
+// =====================================================================
+//  Global Objects
+// =====================================================================
+Sensors          sensors;
+Motors           motors;
+Odometry         odometry;
 PathOptimization optimizer;
 
-// === Simple PID Variables ===
-// Updated for 0-7000 position range (error range: -3500 to +3500)
-// Previous values for -7 to +7 range: Kp=15.0, Ki=0.0, Kd=0.7
-// New values scaled down by 500x to maintain similar behavior
-double Kp = 0.022; // 0.03   // Proportional gain (15.0 / 500)
-double Ki = 0.0003; // 0    // Integral gain (start with 0)
-double Kd = 0.024; // 0.014  // Derivative gain (0.7 / 500)
-float lastError = 0;
-float integral = 0;
-float maxIntegral = 500000;  // Scaled for new error range (1000 * 500). Adjust if enabling Ki.
+// =====================================================================
+//  Steering PID (outer loop)
+//  Input:  line sensor error (-3500 to +3500)
+//  Output: differential velocity in mm/s (ΔV)
+// =====================================================================
+float steerInput    = 0.0f;   // sensor error
+float steerOutput   = 0.0f;   // ΔV
+float steerSetpoint = 0.0f;   // normally 0 (centered on line)
 
-int baseSpeed = 80;    // general base speed for normal runs
-int maxSpeed = 115;     //max speed during run
-int highSpeed = 115;  // For solving case
+QuickPID steerPID(&steerInput, &steerOutput, &steerSetpoint,
+                  STEER_KP_DEFAULT, STEER_KI_DEFAULT, STEER_KD_DEFAULT,
+                  QuickPID::Action::direct);
 
-//Addition
-int junction_identification_delay = 0; //move these many ticks to reverify junction and get available paths
-int line_end_confirmation_ticks = 5;
-int sample_rate = 13;
+// =====================================================================
+//  Speed Settings (WiFi-tunable)
+// =====================================================================
+float currentCruiseSpeed = DEFAULT_CRUISE_SPEED_MMS;
 
-// Confidence
-float LEFT_CONFIDENCE = 0.25;
-float RIGHT_CONFIDENCE = 0.25;
-float STRAIGHT_CONFIDENCE = 0.85;
+// =====================================================================
+//  Junction Detection State
+// =====================================================================
+float junctionConfirmMM   = JUNCTION_CONFIRM_MM_DEFAULT;  // WiFi-tunable
+float junctionMinSpacing  = JUNCTION_MIN_SPACING_MM;
 
-// Delays
-int delayBeforeCenter = 300;
-int delayAfterCenter = 400;
-int dl1 = 1000;
-int dl2 = 1000;
-int dl3 = 1000;
-int dl4 = 1000;
-int dl5 = 1000;
+bool  leftCandidateActive  = false;
+bool  rightCandidateActive = false;
+float candidateStartMM     = 0.0f;
+float lastJunctionMM       = 0.0f;  // distance at last confirmed junction
 
-// // Alignment correction
-// int adjusted_speed = 100;
-// int align_corr_time = 100;
-// float correction_multiplier = 1.5;
-// int initial_ticks = 0;
+// Tracking detected branches during confirmation window
+bool  confirmedLeft   = false;
+bool  confirmedRight  = false;
+bool  confirmedStraight = false;
 
-// //new extra movement for alignment correction
-// int extra_ticks = 0;
+// =====================================================================
+//  Turn Execution State
+// =====================================================================
+enum TurnMode {
+    TURN_NONE,       // Normal line following
+    TURN_HEADING,    // Executing a heading-based turn (odometry)
+    TURN_REACQUIRE   // Searching for line after turn
+};
+TurnMode turnMode = TURN_NONE;
+float    targetHeading    = 0.0f;   // target heading in radians
+float    headingTolerance = 0.15f;  // ~8.6 degrees  (WiFi-tunable)
+unsigned long turnStartMs = 0;
+const unsigned long TURN_TIMEOUT_MS = 3000;  // safety timeout
 
-// === Junction Settings ===
-unsigned long junctionDebounce = 50;  // ms between junction detections
-unsigned long lastJunctionTime = 0;
-int junctionCount = 0;
-
-// === PATH SAVING CONSTANTS ===
-#define MAX_PATH_LENGTH 100
-
-int SLOWDOWN_TICKS = 30;  // Ticks before junction to slow down in optimized run
-
-// === PATH STORAGE ===
+// =====================================================================
+//  Path Storage
+// =====================================================================
 String rawPath = "";
-long pathSegments[MAX_PATH_LENGTH];
+float  pathSegments[MAX_PATH_LENGTH];
 int pathIndex = 0;
 
 String optimizedPath = "";
-long optimizedSegments[MAX_PATH_LENGTH];
-int optimizedPathLength = 0;
-int solvePathIndex = 0;
+float  optimizedSegments[MAX_PATH_LENGTH];
+int    optimizedPathLength = 0;
+int    solvePathIndex = 0;
 
-// === Finish Detection ===
-unsigned long finishDetectTime = 0;
-const unsigned long FINISH_CONFIRM_MS = 300;  // Confirm finish for 300ms
+int    junctionCount = 0;
 
-// === Robot State Machine ===
+// =====================================================================
+//  Dead-end Detection
+// =====================================================================
+unsigned long lineEndStartMs = 0;
+
+// =====================================================================
+//  State Machine
+// =====================================================================
 enum State {
     CALIBRATING,
-    WAIT_FOR_RUN_1,       // Waiting to start mapping run
-    MAPPING,              // First run - mapping the maze
-    OPTIMIZING,           // Processing path
-    WAIT_FOR_RUN_2,       // Waiting to start optimized run
-    SOLVING,              // Second run - using optimized path
+    WAIT_FOR_RUN_1,
+    MAPPING,
+    OPTIMIZING,
+    WAIT_FOR_RUN_2,
+    SOLVING,
     FINISHED
 };
 State currentState = CALIBRATING;
+bool  robotRunning = false;
 
-// === Solving Sub-State Machine ===
-enum SolvingSubState {
-    SOLVE_TURN,
-    SOLVE_FAST_RUN,
-    SOLVE_SLOW_RUN,
-    SOLVE_FINAL_RUN
-};
-SolvingSubState solveState = SOLVE_TURN;
+// =====================================================================
+//  Timing
+// =====================================================================
+unsigned long mappingStartTime  = 0;
+unsigned long solvingStartTime  = 0;
+unsigned long lastWiFiUpdate    = 0;
+unsigned long lastDebugPrint    = 0;
+unsigned long lastControlUs     = 0;
+unsigned long buttonPressStart  = 0;
 
-bool robotRunning = false;
-
-// === Timing ===
-unsigned long runStartTime = 0;
-unsigned long mappingStartTime = 0;
-unsigned long solvingStartTime = 0;
-unsigned long lastWiFiUpdate = 0;
-unsigned long lastDebugPrint = 0;
-
-
-// === Emergency Stop ===
-unsigned long buttonPressStart = 0;
-
-// === Line End Detection ===
-unsigned long lineEndStartTime = 0;
-const unsigned long LINE_END_CONFIRM_TIME = 150;
-
-// === Performance Metrics ===
-// float avgSegmentLength = 0.0;
-// long totalSegmentTicks = 0;
-
-// === Function Declarations ===
+// =====================================================================
+//  Function Declarations
+// =====================================================================
 void setupWiFi();
 void handleWiFiClient();
 void processCommand(String cmd);
 void printMenu();
 void printStatus();
-void printMotorParams();
-void runPID(int speed, float correction_multiplier = 1.0f);
-String junctionTypeToString(JunctionType type);
-unsigned long getDynamicDebounce();
 
+void runControlLoop();
+void handleMappingJunction();
+void handleDeadEnd();
+void executeTurn(char direction);
+void resetControlState();
+char decideLSRB(bool left, bool straight, bool right);
+
+// =====================================================================
+//  SETUP
+// =====================================================================
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    
-    Serial.println("\n╔════════════════════════════════════════╗");
-    Serial.println("║  IIT Bombay Mesmerize Line Follower  ║");
-    Serial.println("║  Digital Sensors + Path Optimization  ║");
-    Serial.println("║  V3.1 - Corrected Debouncing          ║");
-    Serial.println("╚════════════════════════════════════════╝\n");
-    
-    pinMode(ONBOARD_LED, OUTPUT);
-    // pinMode(RGB_PIN_R, OUTPUT);
-    // pinMode(RGB_PIN_G, OUTPUT);
-    // pinMode(RGB_PIN_B, OUTPUT);
-    
-    pinMode(USER_BUTTON, INPUT_PULLUP);
-    
-    // Initialize motors and sensors
-    motors.setup();
-    
-    // Calibrate while rotating (gives sensor exposure to both surfaces)
-    Serial.println("Starting sensor calibration...");
-    setupWiFi();
-    while (true){
 
+    Serial.println("\n╔════════════════════════════════════════╗");
+    Serial.println("║  Line Maze Solver — Cascade PID       ║");
+    Serial.println("║  Continuous Motion / No Junction Stops ║");
+    Serial.println("╚════════════════════════════════════════╝\n");
+
+    pinMode(ONBOARD_LED, OUTPUT);
+    pinMode(USER_BUTTON, INPUT_PULLUP);
+
+    motors.setup();
+
+    Serial.println("Waiting for button press to calibrate...");
+    setupWiFi();
+    while (true) {
         handleWiFiClient();
         yield();
-        
         if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
-            delay(50);  // Debounce
+            delay(50);
             if (digitalRead(USER_BUTTON) == LOW || robotRunning) break;
         }
     }
     delay(2000);
-    currentState = CALIBRATING;
 
+    // Calibrate sensors while spinning
     motors.rotate();
     sensors.setup();
     motors.stopBrake();
-    // WiFi.mode(WIFI_OFF);  // Turn off Wi-Fi completely
-    
+
+    // Initialize odometry with encoder pointers
+    odometry.begin(motors.getLeftEncoder(), motors.getRightEncoder());
+
+    // Configure steering PID
+    steerPID.SetOutputLimits(-maxSpeedMMS, maxSpeedMMS);
+    steerPID.SetSampleTimeUs(STEER_INTERVAL_US);
+    steerPID.SetMode(QuickPID::Control::automatic);
+
     Serial.println("╔════════════════════════════════════════╗");
-    Serial.println("║  Configuration                         ║");
+    Serial.println("║  Configuration                        ║");
     Serial.println("╠════════════════════════════════════════╣");
-    Serial.printf("║  PID: Kp=%.5f Ki=%.5f Kd=%.5f          ║\n", Kp, Ki, Kd);
-    Serial.printf("║  Base Speed: %d  High Speed: %d      ║\n", BASE_SPEED, highSpeed);
-    Serial.printf("║  Junction Debounce: %lums              ║\n", junctionDebounce);
-    Serial.printf("║  TICKS_90° = %d  Center = %d         ║\n", TICKS_FOR_90_DEG, TICKS_TO_CENTER);
+    Serial.printf( "║  Wheel Ø: %.1f mm  Base: %.1f mm      ║\n", WHEEL_DIAMETER_MM, WHEEL_BASE_MM);
+    Serial.printf( "║  mm/tick: %.4f   ticks/mm: %.3f      ║\n", MM_PER_TICK, TICKS_PER_MM);
+    Serial.printf( "║  Sensor offset: %.1f mm               ║\n", SENSOR_OFFSET_MM);
+    Serial.printf( "║  Cruise: %.0f mm/s  Max: %.0f mm/s    ║\n", currentCruiseSpeed, maxSpeedMMS);
+    Serial.printf( "║  Steer PID: Kp=%.5f Ki=%.5f Kd=%.5f  ║\n", STEER_KP_DEFAULT, STEER_KI_DEFAULT, STEER_KD_DEFAULT);
+    Serial.printf( "║  Junc confirm: %.1f mm                ║\n", junctionConfirmMM);
     Serial.println("╚════════════════════════════════════════╝\n");
-    
+
     currentState = WAIT_FOR_RUN_1;
+    lastControlUs = micros();
     Serial.println("✓ Ready for Run 1 (Mapping)");
     Serial.println("Press button or type START via WiFi\n");
 }
 
-unsigned long getDynamicDebounce() {
-    // === CORRECTED LOGIC ===
-    // Slower speed = LONGER debounce (robot stays on junction longer)
-    // Faster speed = SHORTER debounce (robot crosses junction quickly)
-    
-    // Prevent division by zero
-    if (baseSpeed == 0) return junctionDebounce;
-    
-    // Inverted ratio: BASE_SPEED / currentSpeed
-    float speedRatio = (float)(200-50) / (float)baseSpeed;
-    unsigned long dynamicValue = (unsigned long)(junctionDebounce * speedRatio);
-    
-    // Clamp to reasonable range
-    return constrain(dynamicValue, 150, 800);
+// =====================================================================
+//  MAIN CONTROL LOOP
+//  Called every loop() iteration.  Handles cascade PID and motor output.
+// =====================================================================
+void runControlLoop() {
+    // 1. Update odometry
+    odometry.update();
+
+    // 2. Update velocity PID (inner loop — runs every call)
+    motors.updateVelocityPID();
+
+    // 3. Steering logic depends on turn mode
+    if (turnMode == TURN_NONE) {
+        // Normal line following — steering PID tracks line error
+        steerInput   = sensors.getLineError();
+        steerSetpoint = 0.0f;
+        steerPID.Compute();
+
+        float leftTarget  = currentCruiseSpeed - steerOutput;
+        float rightTarget = currentCruiseSpeed + steerOutput;
+        motors.setTargetVelocities(leftTarget, rightTarget);
+    }
+    else if (turnMode == TURN_HEADING) {
+        // Executing a heading-based turn
+        float headingError = targetHeading - odometry.getHeading();
+
+        // Normalize to [-π, π]
+        while (headingError >  (float)M_PI) headingError -= 2.0f * (float)M_PI;
+        while (headingError < -(float)M_PI) headingError += 2.0f * (float)M_PI;
+
+        if (fabsf(headingError) < headingTolerance) {
+            // Turn complete — switch to line reacquisition
+            turnMode = TURN_REACQUIRE;
+        } else {
+            // Proportional heading control with some forward speed
+            float turnRate = constrain(headingError * 3.0f, -1.0f, 1.0f);  // normalized -1..1
+            float fwd   = turnSpeedMMS * 0.3f;   // slow forward during turn
+            float diff   = turnSpeedMMS * turnRate;
+
+            motors.setTargetVelocities(fwd - diff, fwd + diff);
+        }
+
+        // Safety timeout
+        if (millis() - turnStartMs > TURN_TIMEOUT_MS) {
+            turnMode = TURN_REACQUIRE;
+        }
+    }
+    else if (turnMode == TURN_REACQUIRE) {
+        // Line reacquisition: follow the line error but at reduced speed
+        if (sensors.onLine()) {
+            // Line found — resume normal following
+            turnMode = TURN_NONE;
+            steerOutput = 0.0f;
+        } else {
+            // Keep rotating in the direction of the last turn to find line
+            float headingError = targetHeading - odometry.getHeading();
+            while (headingError >  (float)M_PI) headingError -= 2.0f * (float)M_PI;
+            while (headingError < -(float)M_PI) headingError += 2.0f * (float)M_PI;
+
+            float turnDir = (headingError >= 0) ? 1.0f : -1.0f;
+            motors.setTargetVelocities(-turnSpeedMMS * 0.5f * turnDir,
+                                        turnSpeedMMS * 0.5f * turnDir);
+
+            // Timeout: if we've been searching too long, just go forward
+            if (millis() - turnStartMs > TURN_TIMEOUT_MS + 1000) {
+                turnMode = TURN_NONE;
+            }
+        }
+    }
 }
 
+// =====================================================================
+//  TURN EXECUTION
+// =====================================================================
+void executeTurn(char direction) {
+    float currentHeading = odometry.getHeading();
+
+    switch (direction) {
+        case 'L':
+            targetHeading = currentHeading + TURN_90_RAD;
+            break;
+        case 'R':
+            targetHeading = currentHeading - TURN_90_RAD;
+            break;
+        case 'B':
+            targetHeading = currentHeading + TURN_180_RAD;
+            break;
+        case 'S':
+            // Straight — no turn needed
+            return;
+        default:
+            return;
+    }
+
+    // Normalize target heading
+    while (targetHeading >  (float)M_PI) targetHeading -= 2.0f * (float)M_PI;
+    while (targetHeading < -(float)M_PI) targetHeading += 2.0f * (float)M_PI;
+
+    turnMode = TURN_HEADING;
+    turnStartMs = millis();
+}
+
+// =====================================================================
+//  LSRB DECISION
+// =====================================================================
+char decideLSRB(bool left, bool straight, bool right) {
+    if (left)     return 'L';
+    if (straight) return 'S';
+    if (right)    return 'R';
+    return 'B';  // dead end
+}
+
+// =====================================================================
+//  RESET CONTROL STATE
+// =====================================================================
+void resetControlState() {
+    steerInput = steerOutput = steerSetpoint = 0.0f;
+    turnMode = TURN_NONE;
+    leftCandidateActive = rightCandidateActive = false;
+    confirmedLeft = confirmedRight = confirmedStraight = false;
+    lineEndStartMs = 0;
+}
+
+// =====================================================================
+//  MAIN LOOP
+// =====================================================================
 void loop() {
-    yield();  // Let WiFi handle its tasks
+    yield();
     handleWiFiClient();
-    
-    // === Enhanced WiFi Telemetry (every 500ms) ===
+
+    // === WiFi Telemetry ===
     if (millis() - lastWiFiUpdate > 1000 && client && client.connected()) {
         if (client.availableForWrite() > 100) {
-            bool sensorVals[8];
-            sensors.getSensorArray(sensorVals);
-            
+            bool sv[8];
+            sensors.getSensorArray(sv);
             client.print("S:[");
-            for (int i = 0; i < 8; i++) {
-                client.print(sensorVals[i] ? "█" : "·");
-            }
-            
-            unsigned long dynDebounce = getDynamicDebounce();
-            client.printf("] Err:%.1f Spd:%d DB:%lums | ", 
-                        sensors.getLineError(), baseSpeed, dynDebounce);
-            
-            switch(currentState) {
+            for (int i = 0; i < 8; i++) client.print(sv[i] ? "█" : "·");
+            client.printf("] Err:%.0f Spd:%.0f TM:%d | ",
+                steerInput, currentCruiseSpeed, turnMode);
+
+            switch (currentState) {
                 case WAIT_FOR_RUN_1: client.print("WAIT_RUN1"); break;
-                case MAPPING: client.print("MAPPING"); break;
-                case OPTIMIZING: client.print("OPTIMIZING"); break;
+                case MAPPING:        client.print("MAPPING"); break;
+                case OPTIMIZING:     client.print("OPTIMIZING"); break;
                 case WAIT_FOR_RUN_2: client.print("WAIT_RUN2"); break;
-                case SOLVING: client.print("SOLVING"); break;
-                case FINISHED: client.print("FINISHED"); break;
-                default: client.print("CALIBRATING");
+                case SOLVING:        client.print("SOLVING"); break;
+                case FINISHED:       client.print("FINISHED"); break;
+                default:             client.print("CALIBRATING");
             }
-            
-            if(currentState == MAPPING || currentState == SOLVING) {
-                client.print(" | Junc:");
-                client.print(pathIndex);
-                if(currentState == SOLVING && optimizedPathLength > 0) {
-                    client.print("/");
-                    client.print(optimizedPathLength);
+
+            if (currentState == MAPPING || currentState == SOLVING) {
+                client.printf(" | J:%d Seg:%.0fmm", junctionCount, odometry.getSegmentMM());
+                if (currentState == SOLVING && optimizedPathLength > 0) {
+                    client.printf(" [%d/%d]", solvePathIndex, optimizedPathLength);
                 }
             }
-            
             client.println();
             client.flush();
         }
         lastWiFiUpdate = millis();
     }
-    
-    // === Emergency Stop (2 second button press) ===
+
+    // === Emergency Stop (2s button hold) ===
     if (digitalRead(USER_BUTTON) == LOW) {
         if (buttonPressStart == 0) {
             buttonPressStart = millis();
@@ -272,746 +372,366 @@ void loop() {
             robotRunning = false;
             currentState = FINISHED;
             Serial.println("\n⚠️ EMERGENCY STOP!");
-            if (client && client.connected()) {
-                client.println("⚠️ EMERGENCY STOP!");
-            }
+            if (client && client.connected()) client.println("⚠️ EMERGENCY STOP!");
             buttonPressStart = 0;
         }
-    }
-    else {
+    } else {
         buttonPressStart = 0;
     }
 
-    // === Detailed Debug Output (every 100ms) ===
-    if (millis() - lastDebugPrint > 1000) {
-        bool sensorVals[8];
-        sensors.getSensorArray(sensorVals);
-
-        if (client && client.connected()){
-            
-            client.print("Sensor: [");
-            for(int i = 0; i < 8; i++) {
-                client.print(sensorVals[i] ? "█" : "·");
-            }
-            client.printf("] Err:%.1f Speed:%d Path:%s DynDB:%lums\n", 
-                            sensors.getLineError(), baseSpeed, rawPath.c_str(), getDynamicDebounce());
-            client.println();
-            
-        }
-        lastDebugPrint = millis();
-    }
-    
-    // === Main State Machine ===
+    // ================================================================
+    //  STATE MACHINE
+    // ================================================================
     switch (currentState) {
-        
-        case WAIT_FOR_RUN_1:
-        {
-            // digitalWrite(RGB_PIN_R, LOW);
-            // digitalWrite(RGB_PIN_B, HIGH);
-            // digitalWrite(RGB_PIN_G, LOW);
 
-            // Wait for button press or START command
+    // ----------------------------------------------------------------
+    case WAIT_FOR_RUN_1:
+    {
+        if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
+            delay(50);
             if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
-                delay(50);  // Debounce
-                if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
-                    
-                    if (client && client.connected()) {
-                        client.println("\n>>> RUN 1: MAPPING STARTED!");
-                    }
-                    
-                    currentState = MAPPING;
-                    robotRunning = true;
-                    pathIndex = 0;
-                    rawPath = "S";
-                    // totalSegmentTicks = 0;
-                    junctionCount = 0;
-                    lastJunctionTime = 0;
-                    lineEndStartTime = 0;
-                    finishDetectTime = 0;
-                    mappingStartTime = millis();
-                    
-                    // Reset PID
-                    lastError = 0;
-                    integral = 0;
-                    motors.clearEncoders();
-                    
-                    // Wait for button release
-                    while(digitalRead(USER_BUTTON) == LOW) delay(10);
+                if (client && client.connected())
+                    client.println("\n>>> RUN 1: MAPPING STARTED!");
 
-                    // digitalWrite(RGB_PIN_R, LOW);
-                    // digitalWrite(RGB_PIN_B, LOW);
-                    // digitalWrite(RGB_PIN_G, HIGH);
-                }
+                currentState   = MAPPING;
+                robotRunning   = true;
+                pathIndex      = 0;
+                rawPath        = "S";   // start with 'S' (start marker)
+                junctionCount  = 0;
+                mappingStartTime = millis();
+
+                resetControlState();
+                odometry.reset();
+                motors.clearEncoders();
+                odometry.begin(motors.getLeftEncoder(), motors.getRightEncoder());
+                lastJunctionMM = 0.0f;
+
+                while (digitalRead(USER_BUTTON) == LOW) delay(10);
             }
+        }
+        break;
+    }
+
+    // ----------------------------------------------------------------
+    case MAPPING:
+    {
+        if (!robotRunning) {
+            motors.stopBrake();
+            currentState = FINISHED;
             break;
         }
-            
-        case MAPPING:
-        {
-            if (!robotRunning) {
-                motors.stopBrake();
-                currentState = FINISHED;
-                if (client && client.connected()) client.println("\n>>> STOPPED");
-                break;
-            }
-            
-            // === Run PID Line Following ===
-            runPID(baseSpeed);
 
-            // === Junction Detection (with dynamic debounce) ===
-            unsigned long currentDebounce = getDynamicDebounce();
-            
-            if (millis() - lastJunctionTime > currentDebounce) {
-                PathOptions pathsA1 = sensors.getAvailablePaths();
-                
-                // Count available pathsA
-                int pathCount = 0;
-                if (pathsA1.left) pathCount++;
-                if (pathsA1.right) pathCount++;
-                if (pathsA1.straight) pathCount++;
-                
-                // Is this a junction?  (more than just straight OR only left/right)
-                bool isJunction_check_1 = (pathCount > 1) || (pathCount == 1 && !pathsA1.straight);
-                bool isjunction_check_2 = 0;
-                int leftDetections = 0;
-                int rightDetections = 0;
-                int straightDetections = 0;
-                if(isJunction_check_1){
-                    motors.stopBrake();
-                    delay(5000);
-                    motors.setSpeeds(80,80);
-                    int confirmations = 0;
-                    for (int i = 0; i < 20; i++) {  // Take 10 quick samples
-                        PathOptions p = sensors.getAvailablePaths();
-                        int pc = 0;
-                        if (p.left) {
-                            pc++;
-                            leftDetections++;
-                        }
-                        if (p.right) {
-                            pc++;
-                            rightDetections++;
-                        }
-                        if (p.straight) {
-                            pc++;
-                            straightDetections++;
-                        }
-                        if ((pc > 1) || (pc == 1 && !p.straight)) {
-                            confirmations++;
-                        }
-                        delayMicroseconds(3000);  // 3ms between samples
-                    }
-                    if(confirmations >= sample_rate) isjunction_check_2 = true;
-                    else isjunction_check_2 = false;
-                }
-                motors.stopBrake();
-                delay(5000);
-                runPID(baseSpeed);
+        // Run cascade PID control loop
+        runControlLoop();
 
-                // if (client && client.connected()) client.printf("leftA: %d, rightA: %d \n", pathsA.left, pathsA.right);
-                // if (client && client.connected()) client.println();
-                if (isJunction_check_1 && isjunction_check_2) {
-                    // Record segment ticks BEFORE any junction handling
-                    long segmentTicks = motors.getAverageCount();
-                    
-                    motors.stopBrake();
-                    delay(1);
-                    
-                    // Continuous path detection for 100ms WITHOUT PID (to avoid drift)
-                    unsigned long detectionStartTime = millis();
-                    int totalSamples = 0;
-                    
-                    // Track starting position for the 100ms sampling movement
-                    long samplingStartTicks = motors.getAverageCount();
-                    
-                    while (millis() - detectionStartTime < 60) {  // 100ms continuous detection
-                        // Just move straight slowly, NO PID correction
-                        motors.setSpeeds(60, 60);  // Equal speeds = straight movement
-                        
-                        PathOptions sample = sensors.getAvailablePaths_2();
-                        if (sample.left) leftDetections++;
-                        if (sample.right) rightDetections++;
-                        if (sample.straight) straightDetections++;
-                        totalSamples++;
-                        
-                        yield();
-                        delay(1);  // Sample every 3ms
-                    }
-                    
-                    motors.stopBrake();
-                    
-                    // Calculate how many ticks were traveled during sampling
-                    long samplingTicks = motors.getAverageCount() - samplingStartTicks;
-                    
-                    if (client && client.connected()) {
-                        client.println("Junction detected!\n");
-                        client.printf("Samples: L=%d, S=%d, R=%d (Total=%d)\n", 
-                                    leftDetections, straightDetections, rightDetections, totalSamples);
-                        client.printf("Ticks during sampling:  %ld\n", samplingTicks);
-                    }
-                    
-                    // Combine results with confidence threshold
-                    PathOptions paths;
-                    float leftConfidence = (totalSamples > 0) ? (float)leftDetections / (totalSamples+20) : 0;
-                    float rightConfidence = (totalSamples > 0) ? (float)rightDetections / (totalSamples+20) : 0;
-                    float straightConfidence = (totalSamples > 0) ? (float)straightDetections / (totalSamples+20) : 0;
-                    
-                    paths.left = (leftConfidence >= LEFT_CONFIDENCE);  // 5.5% confidence threshold | changes << nikhil
-                    paths.right = (rightConfidence >= RIGHT_CONFIDENCE);
-                    paths.straight = (straightConfidence >= STRAIGHT_CONFIDENCE);  // 85% confidence threshold
-                    
-                    if (client && client.connected()) {
-                        client.printf("Path confidence - L:  %.0f%%, S: %. 0f%%, R: %.0f%%\n",
-                                    leftConfidence * 100, straightConfidence * 100, rightConfidence * 100);
-                        client.printf("Detected paths - L: %d, S: %d, R: %d\n",
-                                    paths.left, paths.straight, paths.right);
-                    }
-                    
-                    // // Move forward additional amount if needed (junction_identification_delay)
-                    // if (junction_identification_delay > 0) {
-                    //     if (client && client.connected()) {
-                    //         client.printf("Moving forward by %d ticks\n", junction_identification_delay);
-                    //     }
-                    //     motors.moveForward(junction_identification_delay);
-                    //     motors.stopBrake();
-                    // }
-                    
-                    if (client && client.connected()) client.println("Taking delay before centering");
-                    delay(delayBeforeCenter);
-                    
-                    // Display junction info
-                    if (client && client. connected()) {
-                        client.printf("J%d: ", junctionCount);
-                        if (paths.left) client.print("L");
-                        if (paths.straight) client.print("S");
-                        if (paths.right) client.print("R");
-                        client.println();
-                    }
-                    
-                    // Move to center
-                    if (client && client.connected()) client.println("Executing ticks to center");
-                    motors.moveForward(TICKS_TO_CENTER);
-                    motors.stopBrake();
-                    yield();
-                    
-                    if (client && client.connected()) client.println("Taking Delaying after center");
-                    delay(delayAfterCenter);
-                    yield();
+        // === Distance-confirmed junction detection ===
+        if (turnMode == TURN_NONE) {
+            float currentDist = odometry.getSegmentMM();
 
-                    // Calculate total segment length
-                    long totalSegmentLength = segmentTicks + samplingTicks + junction_identification_delay + TICKS_TO_CENTER;
+            bool leftNow   = sensors.hasLeftBranch();
+            bool rightNow  = sensors.hasRightBranch();
+            bool straightNow = sensors.hasStraight();
+            bool branchNow = leftNow || rightNow;
 
-                    if (client && client. connected()) {
-                        client.printf("Segment length:  %ld ticks\n", totalSegmentLength);
-                    }
-                    
-                    // Check for overflow
-                    if (pathIndex >= MAX_PATH_LENGTH) {
-                        Serial.println("❌ ERROR: Path array full!");
+            // Min spacing check (don't double-count junctions)
+            bool spacingOK = (currentDist - lastJunctionMM > junctionMinSpacing)
+                          || (lastJunctionMM == 0.0f);
 
-                        // digitalWrite(RGB_PIN_R, HIGH);
-                        // digitalWrite(RGB_PIN_B, LOW);
-                        // digitalWrite(RGB_PIN_G, LOW);
+            if (branchNow && spacingOK) {
+                if (!leftCandidateActive && !rightCandidateActive) {
+                    // Start candidate confirmation window
+                    leftCandidateActive  = leftNow;
+                    rightCandidateActive = rightNow;
+                    candidateStartMM     = currentDist;
+                    confirmedLeft    = leftNow;
+                    confirmedRight   = rightNow;
+                    confirmedStraight = straightNow;
+                } else {
+                    // Accumulate detections during confirmation window
+                    confirmedLeft    = confirmedLeft   || leftNow;
+                    confirmedRight   = confirmedRight  || rightNow;
+                    confirmedStraight = confirmedStraight || straightNow;
 
-                        currentState = FINISHED;
-                        break;
-                    }
-                    
-                    // Save segment
-                    pathSegments[pathIndex] = totalSegmentLength;
-                    
-                    // Clear encoders BEFORE turn
-                    motors.clearEncoders();
-                    delay(1);
-                    
-                    junctionCount++;
-                    
-                    // Check for endpoint
-                    if (sensors.isEndPoint()) {
-                        motors.stopBrake();
-                        robotRunning = false;
-                        
-                        unsigned long runTime = (millis() - mappingStartTime) / 1000;
-                        
-                        if (client && client.connected()) {
-                            client.println("\n🏆 DRY RUN COMPLETE!");
-                            client.printf("Time: %lus | Junctions: %d\n", runTime, junctionCount);
-                            client.println();
-                        }
+                    float traveled = currentDist - candidateStartMM;
+                    if (traveled >= junctionConfirmMM) {
+                        // ★ CONFIRMED JUNCTION ★
+                        float segmentDist = candidateStartMM;  // distance to junction start
 
-                        motors.moveForward(150);
-                        motors.stopBrake();
-
-                        // digitalWrite(RGB_PIN_R, HIGH);
-                        // digitalWrite(RGB_PIN_B, LOW);
-                        // digitalWrite(RGB_PIN_G, LOW);
-
-                        currentState = OPTIMIZING;
-                        // digitalWrite(RGB_PIN_R, HIGH);
-                        break;
-                    }
-                    
-                    bool sensorVals[8];
-                    sensors.getSensorArray(sensorVals);
-                    
-                    // === LSRB Logic:  Left > Straight > Right > Back ===
-                    if (paths.left) {
-                        if (client && client.connected()) client.println("  → Taking LEFT");
-                        motors.turn_90_left_smart(sensors);
-                        rawPath += 'L';
-                    }
-                    else if ((sensorVals[3] || sensorVals[4]) || paths.straight) {
-                        if (client && client.connected()) client.println("  → Going STRAIGHT");
-                        rawPath += 'S';
-                    }
-                    else if (paths.right) {
-                        if (client && client.connected()) client.println("  → Taking RIGHT");
-                        motors.turn_90_right_smart(sensors);
-                        rawPath += 'R';
-                    }
-                    else {
-                        if (client && client.connected()) client.println("  → DEAD END - Turning back");
-                        motors.turn_180_back_smart(sensors);
-                        rawPath += 'B';
-                    }
-
-                    // motors.clearEncoders();
-                    // // Alignment Correction
-                    // int time_taken = millis();
-                    // while ((millis() - time_taken) < align_corr_time) {
-                    //     runPID(adjusted_speed, correction_multiplier);
-                    // }
-                    // extra_ticks = motors.getAverageCount();
-                    // motors.stopBrake();
-                    // delay(1000);
-
-                    
-                    pathIndex++;
-                    
-                    // Reset after junction
-                    motors.clearEncoders();
-                    lastError = sensors.getLineError();  // Use current error, not 0
-                    integral = 0;
-                    lastJunctionTime = millis();
-                    delay(dl1);
-                    yield();
-                }
-                else if (sensors.isLineEnd()) {
-                        
-                    long segmentTicks = motors.getAverageCount();
-                    motors.moveForward(line_end_confirmation_ticks);
-                    motors.stopBrake();
-                    delay(dl2);
-
-                    if (sensors.isLineEnd()) {
-                        if (client && client.connected()) client.println("  → DEAD END - Turning back");
                         junctionCount++;
 
-                        // MOVE TO CENTER
-                        motors.moveForward(20);
+                        if (client && client.connected()) {
+                            client.printf("J%d @ %.0fmm: L=%d S=%d R=%d\n",
+                                junctionCount, segmentDist,
+                                confirmedLeft, confirmedStraight, confirmedRight);
+                        }
 
-                        // Record and Save segment for backing up
-                        pathSegments[pathIndex] = segmentTicks + 20 + line_end_confirmation_ticks;
+                        // Check for endpoint (all sensors on)
+                        if (sensors.isEndPoint()) {
+                            motors.stopBrake();
+                            robotRunning = false;
+                            unsigned long runTime = (millis() - mappingStartTime) / 1000;
+                            if (client && client.connected()) {
+                                client.println("\n🏆 MAPPING COMPLETE!");
+                                client.printf("Time: %lus | Junctions: %d\n", runTime, junctionCount);
+                            }
+                            currentState = OPTIMIZING;
+                            break;
+                        }
 
-                        pathIndex++;
+                        // Save segment
+                        if (pathIndex < MAX_PATH_LENGTH) {
+                            pathSegments[pathIndex] = segmentDist;
 
-                        // Turn and save path
-                        motors.turn_180_back_smart(sensors);
+                            // LSRB decision
+                            char decision = decideLSRB(confirmedLeft, confirmedStraight, confirmedRight);
+                            rawPath += decision;
+
+                            if (client && client.connected()) {
+                                client.printf("  → %c  (seg: %.0fmm)\n", decision, segmentDist);
+                            }
+
+                            pathIndex++;
+
+                            // Execute turn
+                            executeTurn(decision);
+
+                            // Reset segment tracking
+                            lastJunctionMM = currentDist;
+                            odometry.resetSegment();
+                        }
+
+                        // Reset candidate state
+                        leftCandidateActive = rightCandidateActive = false;
+                        confirmedLeft = confirmedRight = confirmedStraight = false;
+                    }
+                }
+            } else if (!branchNow && (leftCandidateActive || rightCandidateActive)) {
+                // Branch disappeared before confirmation → was drift, reset
+                leftCandidateActive = rightCandidateActive = false;
+                confirmedLeft = confirmedRight = confirmedStraight = false;
+            }
+
+            // === Dead-end detection ===
+            if (sensors.isLineEnd()) {
+                if (lineEndStartMs == 0) {
+                    lineEndStartMs = millis();
+                } else if (millis() - lineEndStartMs > DEAD_END_CONFIRM_MS) {
+                    // Confirmed dead end
+                    float segmentDist = odometry.getSegmentMM();
+                    junctionCount++;
+
+                    if (client && client.connected()) {
+                        client.printf("DEAD END @ %.0fmm\n", segmentDist);
+                    }
+
+                    if (pathIndex < MAX_PATH_LENGTH) {
+                        pathSegments[pathIndex] = segmentDist;
                         rawPath += 'B';
+                        pathIndex++;
+                    }
 
-                        // Reset
-                        motors.clearEncoders();
-                        lastError = 0;
-                        integral = 0;
-                        lastJunctionTime = millis();
-                        delay(dl1);
-                    }
-                    else {
-                        if (client && client. connected()) client.println("false line end detected");
-                        runPID(baseSpeed);
-                    }
+                    executeTurn('B');
+                    odometry.resetSegment();
+                    lastJunctionMM = 0.0f;
+                    lineEndStartMs = 0;
+                    leftCandidateActive = rightCandidateActive = false;
                 }
+            } else {
+                lineEndStartMs = 0;
             }
+        }
+        break;
+    }
+
+    // ----------------------------------------------------------------
+    case OPTIMIZING:
+    {
+        motors.stopBrake();
+        robotRunning = false;
+
+        unsigned long mappingTime = (millis() - mappingStartTime) / 1000;
+
+        if (client && client.connected()) {
+            client.println("\n╔════════════════════════════════════════╗");
+            client.println("║  RUN 1 COMPLETE — OPTIMIZING PATH     ║");
+            client.println("╚════════════════════════════════════════╝");
+            client.printf("Time: %lus\n", mappingTime);
+            client.printf("Raw Path: %s (%d moves)\n", rawPath.c_str(), rawPath.length());
+        }
+
+        if (rawPath.length() == 0) {
+            if (client && client.connected()) client.println("❌ ERROR: No path recorded!");
+            currentState = FINISHED;
             break;
         }
-        
-        case OPTIMIZING:
-        {
+
+        // Copy to optimized
+        optimizedPath = rawPath;
+        optimizedPathLength = rawPath.length();
+        for (int i = 0; i < pathIndex && i < MAX_PATH_LENGTH; i++) {
+            optimizedSegments[i] = pathSegments[i];
+        }
+
+        // Optimize with multiple iterations
+        int iterations = 0;
+        int noChange = 0;
+        while (iterations < 50 && noChange < 3) {
+            int oldLen = optimizedPathLength;
+            optimizer.optimize(optimizedPath, optimizedSegments, optimizedPathLength);
+            if (oldLen == optimizedPathLength) noChange++;
+            else noChange = 0;
+            iterations++;
+            delay(1);
+        }
+
+        if (client && client.connected()) {
+            client.println("\n╔════════════════════════════════════════╗");
+            client.println("║      PATH OPTIMIZED!                  ║");
+            client.println("╚════════════════════════════════════════╝");
+            client.printf("Raw:       %s\n", rawPath.c_str());
+            client.printf("Optimized: %s\n", optimizedPath.c_str());
+            client.printf("Saved %d moves!\n", rawPath.length() - optimizedPath.length());
+
+            client.println("\nSegment distances (mm):");
+            for (int i = 0; i < optimizedPathLength; i++) {
+                client.printf("  [%d] %c → %.0f mm\n", i, optimizedPath[i], optimizedSegments[i]);
+            }
+        }
+
+        currentState = WAIT_FOR_RUN_2;
+        solvePathIndex = 0;
+        break;
+    }
+
+    // ----------------------------------------------------------------
+    case WAIT_FOR_RUN_2:
+    {
+        if (digitalRead(USER_BUTTON) == LOW || (robotRunning && optimizedPath.length() > 0)) {
+            delay(50);
+            if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
+                if (client && client.connected()) {
+                    client.println("\n>>> RUN 2: SOLVING STARTED!");
+                    client.printf("Following path: %s\n", optimizedPath.c_str());
+                }
+
+                currentState     = SOLVING;
+                robotRunning     = true;
+                solvePathIndex   = 0;
+                solvingStartTime = millis();
+
+                resetControlState();
+                odometry.reset();
+                motors.clearEncoders();
+                odometry.begin(motors.getLeftEncoder(), motors.getRightEncoder());
+
+                while (digitalRead(USER_BUTTON) == LOW) delay(1);
+            }
+        }
+        break;
+    }
+
+    // ----------------------------------------------------------------
+    case SOLVING:
+    {
+        if (!robotRunning) {
             motors.stopBrake();
-            robotRunning = false;
-            
-            unsigned long mappingTime = (millis() - mappingStartTime) / 1000;
-
-            if (client && client.connected()){
-                client.println("\n╔════════════════════════════════════════╗");
-                client.println("║  RUN 1 COMPLETE - OPTIMIZING PATH    ║");
-                client.println("╚════════════════════════════════════════╝");
-                client.print("Mapping time: ");
-                client.print(mappingTime);
-                client.println(" seconds");
-                client.print("Raw Path: ");
-                client.print(rawPath);
-                client.print(" (");
-                client.print(rawPath.length());
-                client.println(" moves)");
-                // Serial.print("Average segment: ");
-                // Serial.print(avgSegmentLength, 1);
-                // Serial.println(" ticks");
-            }
-            
-            if (rawPath.length() == 0) {
-                if (client && client.connected()) client.println("❌ ERROR: No path recorded!");
-                currentState = FINISHED;
-                break;
-            }
-            
-            // copy path
-            optimizedPath = rawPath;
-            optimizedPathLength = rawPath.length();
-            
-            // Copy segments
-            for (int i = 0; i < pathIndex && i < MAX_PATH_LENGTH; i++) {
-                optimizedSegments[i] = pathSegments[i];
-            }
-            
-            if (client && client.connected()) client.println("\nOptimizing path...");
-            
-            // === Path Optimization with multiple iterations ===
-            int iterations = 0;
-            int consecutiveNoChange = 0;
-            const int MAX_ITERATIONS = 50;
-            const int MAX_NO_CHANGE = 3;
-            
-            while(iterations < MAX_ITERATIONS && consecutiveNoChange < MAX_NO_CHANGE) {
-                int oldLength = optimizedPathLength;
-                optimizer.optimize(optimizedPath, optimizedSegments, optimizedPathLength);
-                
-                if(oldLength == optimizedPathLength) {
-                    consecutiveNoChange++;
-                }
-                else {
-                    consecutiveNoChange = 0;
-                }
-                iterations++;
-                delay(1);
-            }
-            
-            if(consecutiveNoChange >= MAX_NO_CHANGE) {
-                Serial.println("  (converged - no further improvements)");
-            }
-            
-            // Serial.println("\n╔════════════════════════════════════════╗");
-            // Serial.print("║  Final Path: ");
-            // Serial.print(optimizedPath);
-            // for(int i = optimizedPath.length(); i < 25; i++) Serial.print(" ");
-            // Serial.println("║");
-            // Serial.print("║  Length: ");
-            // Serial.print(optimizedPath.length());
-            // Serial.print(" moves");
-            // for(int i = String(optimizedPath.length()).length(); i < 20; i++) Serial.print(" ");
-            // Serial.println("║");
-            // Serial.print("║  Saved: ");
-            // Serial.print(rawPath.length() - optimizedPath.length());
-            // Serial.print(" moves");
-            // for(int i = String(rawPath.length() - optimizedPath.length()).length(); i < 21; i++) Serial.print(" ");
-            // Serial.println("║");
-            // Serial.println("╚════════════════════════════════════════╝\n");
-            
-            if (client && client.connected()) {
-                client.println("\n╔════════════════════════════════════════╗");
-                client.println("║      PATH OPTIMIZED!                   ║");
-                client.println("╚════════════════════════════════════════╝");
-                client.print("Raw: ");
-                client.println(rawPath);
-                client.print("Optimized: ");
-                client.println(optimizedPath);
-                client.print("Saved ");
-                client.print(rawPath.length() - optimizedPath.length());
-                client.println(" moves!");
-            }
-            currentState = WAIT_FOR_RUN_2;
-            solvePathIndex = 0;
             break;
         }
-        
-        case WAIT_FOR_RUN_2:
-        {
 
-            // digitalWrite(RGB_PIN_R, HIGH);
-            // digitalWrite(RGB_PIN_B, LOW);
-            // digitalWrite(RGB_PIN_G, LOW);
-
-            if (digitalRead(USER_BUTTON) == LOW || (robotRunning && optimizedPath.length() > 0)) {
-                delay(50);
-                if (digitalRead(USER_BUTTON) == LOW || robotRunning) {
-                    Serial.println("\n╔════════════════════════════════════════╗");
-                    Serial.println("║     RUN 2: SOLVING STARTED            ║");
-                    Serial.println("╚════════════════════════════════════════╝\n");
-                    
-                    if (client && client.connected()) {
-                        client.println("\n>>> RUN 2: SOLVING STARTED!");
-                        client.print("Following optimized path: ");
-                        client.println(optimizedPath);
-                    }
-                    
-                    currentState = SOLVING;
-                    robotRunning = true;
-                    solvePathIndex = 0;
-                    solveState = SOLVE_TURN;
-                    solvingStartTime = millis();
-                    lastError = 0;
-                    integral = 0;
-                    motors.clearEncoders();
-                    
-                    while(digitalRead(USER_BUTTON) == LOW) delay(1);
-
-                    // digitalWrite(RGB_PIN_R, LOW);
-                    // digitalWrite(RGB_PIN_B, HIGH);
-                    // digitalWrite(RGB_PIN_G, HIGH);
-                }
-            }
-            break;
+        if (optimizedPath.isEmpty() || optimizedPathLength == 0) {
+            Serial.println("ERROR: Missing optimized path!");
+            currentState = FINISHED;
+            return;
         }
-        
-        case SOLVING:
-        {
-            if (!robotRunning) {
+
+        // Run cascade PID
+        runControlLoop();
+
+        // Check if we've finished all segments
+        if (solvePathIndex >= optimizedPathLength) {
+            // Final segment — run until endpoint
+            if (sensors.isEndPoint()) {
                 motors.stopBrake();
-                break;
-            }
-            if (optimizedPath.isEmpty() || optimizedPathLength == 0) {
-                Serial.println("ERROR: Missing optimized path!");
+                robotRunning = false;
+                unsigned long solveTime = (millis() - solvingStartTime) / 1000;
+                if (client && client.connected()) {
+                    client.println("\n╔════════════════════════════════════════╗");
+                    client.println("║      🏆  MAZE SOLVED!  🏆             ║");
+                    client.println("╚════════════════════════════════════════╝");
+                    client.printf("Solve time: %lus\n", solveTime);
+                }
                 currentState = FINISHED;
-                return;
             }
-            
-            if (solveState == SOLVE_TURN) {
-                if (solvePathIndex >= optimizedPathLength) {
-                    // Finished all turns - final segment
-                    solveState = SOLVE_FINAL_RUN;
-                    Serial.println("→ Final segment to finish");
-                }
-                else {
-                    char turn = optimizedPath[solvePathIndex];
-                    
-                    if (turn == 'L') {
-                        if (client && client.connected()) client.println("LEFT turn");
-                        motors.turn_90_left_smart(sensors);
-                    }
-                    else if (turn == 'R') {
-                        if (client && client.connected()) client.println("RIGHT turn");
-                        motors.turn_90_right_smart(sensors);
-                    }
-                    else {
-                        if (client && client.connected()) client.println("STRAIGHT");
-                        // No turn needed for 'S'
-                    }
-                    
-                    if (solvePathIndex >= optimizedPathLength - 1) {
-                        solveState = SOLVE_FINAL_RUN;
-                    }
-                    else {
-                        motors.clearEncoders();
-                        solveState = SOLVE_FAST_RUN;
-                    }
-                    lastError = 0;
-                    integral = 0;
-                    delay(dl3);
+        }
+        else if (turnMode == TURN_NONE) {
+            // Check if we've traveled enough distance for this segment
+            float targetDist = optimizedSegments[solvePathIndex];
+            float currentDist = odometry.getSegmentMM();
+
+            if (currentDist >= targetDist) {
+                // Time to execute the next turn
+                char turn = optimizedPath[solvePathIndex];
+
+                if (client && client.connected()) {
+                    client.printf("Seg %d/%d: %c @ %.0f/%.0fmm\n",
+                        solvePathIndex + 1, optimizedPathLength,
+                        turn, currentDist, targetDist);
                 }
 
-            }
-            else if (solveState == SOLVE_FAST_RUN) {
-                long currentTicks = motors.getAverageCount();
-                long targetTicks = optimizedSegments[solvePathIndex];
-                
-                if (currentTicks < (targetTicks - SLOWDOWN_TICKS)) {
-                    runPID(highSpeed);  // GO FAST!
-                }
-                else {
-                    solveState = SOLVE_SLOW_RUN;
-                }
-                PathOptions pathsA = sensors.getAvailablePaths();
-                
-                // Count available pathsA
-                int pathCounter = 0;
-                if (pathsA.left) pathCounter++;
-                if (pathsA.right) pathCounter++;
-                if (pathsA.straight) pathCounter++;
-                
-                // Is this a junction?  (more than just straight OR only left/right)
-                bool isJunction_a = (pathCounter > 1) || (pathCounter == 1 && !pathsA.straight);
-                bool isJunction_b = 0;
-                if(isJunction_a){
-                    int confirmations = 0;
-                    for (int i = 0; i < 10; i++) {  // Take 10 quick samples
-                        PathOptions p = sensors.getAvailablePaths();
-                        int pc = 0;
-                        if (p.left) {
-                            pc++;
-                        }
-                        if (p.right) {
-                            pc++;
-                        }
-                        if (p.straight) {
-                            pc++;
-                        }
-                        if ((pc > 1) || (pc == 1 && !p.straight)) {
-                            confirmations++;
-                        }
-                        delayMicroseconds(1000);  // 1ms between samples
-                    }
-                    if(confirmations >= 6) isJunction_b = true;
-                    else isJunction_b = false;
-                }
-                if(isJunction_a && isJunction_b){
-                    motors.stopBrake();
-                    solveState = SOLVE_SLOW_RUN;
-                    delay(dl4);
-                }
-            }
-            else if (solveState == SOLVE_SLOW_RUN) {
-                long currentTicks = motors.getAverageCount();
-                long targetTicks = optimizedSegments[solvePathIndex];
-                
-                motors.moveForward(SLOWDOWN_TICKS);  // Slow down for accuracy
-
-                motors.stopBrake();
+                executeTurn(turn);
+                odometry.resetSegment();
                 solvePathIndex++;
-                solveState = SOLVE_TURN;
-                delay(dl5);
             }
-            else if (solveState == SOLVE_FINAL_RUN) {
-                runPID(baseSpeed);
-                
-                // Check for finish (line end)
-                if (sensors.isEndPoint()) {
-                    motors.moveForward(250);
-                    motors.stopBrake();
-                    robotRunning = false;
-                    
-                    unsigned long solvingTime = (millis() - solvingStartTime) / 1000;
-                    
-                    if (client && client.connected()) {
-                        client.println("\n╔════════════════════════════════════════╗");
-                        client.println("║      🏆  MAZE SOLVED!  🏆              ║");
-                        client.println("╚════════════════════════════════════════╝");
-                        client.print("Time: ");
-                        client.print(solvingTime);
-                        client.println("s");
-                    }
-                    
-                    currentState = FINISHED;
-                }
-            }
-            break;
         }
-            
-        case FINISHED:
-        {
+        break;
+    }
 
-            // digitalWrite(RGB_PIN_R, HIGH);
-            // digitalWrite(RGB_PIN_B, LOW);
-            // digitalWrite(RGB_PIN_G, LOW);
-
-            // Victory blink
-            int i = 0;
-            while(i < 200){
-            digitalWrite(ONBOARD_LED, !digitalRead(ONBOARD_LED));
+    // ----------------------------------------------------------------
+    case FINISHED:
+    {
+        // Victory blink
+        for (int i = 0; i < 4; i++) {
+            digitalWrite(ONBOARD_LED, HIGH);
             delay(30);
-            digitalWrite(ONBOARD_LED, !digitalRead(ONBOARD_LED));
+            digitalWrite(ONBOARD_LED, LOW);
             delay(20);
-            i+=50;
-            }
-
-            break;
         }
-        
-        case CALIBRATING:
-            break;
+        break;
+    }
+
+    case CALIBRATING:
+        break;
     }
 }
 
-// === PID Line Following ===
-void runPID(int speed, float correction_multiplier) {
-    // Get current error from sensors
-    float error = sensors.getLineError();
-    
-    // PID calculations
-    float P = Kp * error;
-    
-    integral += error;
-    // Anti-windup: constrain integral
-    integral = constrain(integral, -maxIntegral, maxIntegral);
-    float I = Ki * integral;
-    
-    float D = Kd * (error - lastError);
-    
-    // Total correction
-    float correction = P + I + D;
-    
-    // Constrain correction
-    correction = constrain(correction, -speed, speed) * correction_multiplier;
-    
-    // Apply to motors
-    int leftSpeed = speed - (int)correction;
-    int rightSpeed = speed + (int)correction;
-    
-    // Constrain motor speeds
-    leftSpeed = constrain(leftSpeed, -maxSpeed, maxSpeed);
-    rightSpeed = constrain(rightSpeed, -maxSpeed, maxSpeed);
-    
-    motors.setSpeeds(leftSpeed, rightSpeed);
-    
-    // Save for next iteration
-    lastError = error;
-}
-
-String junctionTypeToString(JunctionType type) {
-    switch(type) {
-        case JUNCTION_T_LEFT: return "T-Left ├";
-        case JUNCTION_T_RIGHT: return "T-Right ┤";
-        case JUNCTION_T_BOTH: return "T-Both ┬";
-        case JUNCTION_CROSS: return "Cross ┼";
-        case JUNCTION_90_LEFT: return "90° Left └";
-        case JUNCTION_90_RIGHT: return "90° Right ┘";
-        case JUNCTION_DEAD_END: return "Dead End";
-        default: return "Straight";
-    }
-}
-
+// =====================================================================
+//  WIFI SETUP
+// =====================================================================
 void setupWiFi() {
     Serial.println("\n╔════════════════════════════════════════╗");
     Serial.println("║              WiFi Setup                ║");
     Serial.println("╚════════════════════════════════════════╝");
-    
-    // ★★★ CRITICAL: Disconnect any previous connection ★★★
+
     WiFi.disconnect(true);
     delay(100);
-    
-    // ★★★ Set WiFi mode explicitly ★★★
     WiFi.mode(WIFI_STA);
     delay(100);
-    
+
     Serial.print("Connecting to: ");
     Serial.println(WIFI_SSID);
-    
     WiFi.begin(WIFI_SSID, WIFI_PASS);
-    
+
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {  // ★ 40 attempts (20 sec)
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
         delay(500);
         Serial.print(".");
-        
-        // Print diagnostic status every 10 attempts
         if (attempts % 10 == 9) {
             Serial.print(" [Status: ");
-            switch(WiFi.status()) {
+            switch (WiFi.status()) {
                 case WL_IDLE_STATUS:    Serial.print("IDLE"); break;
-                case WL_NO_SSID_AVAIL:  Serial.print("NO SSID"); break;
-                case WL_SCAN_COMPLETED: Serial.print("SCAN DONE"); break;
+                case WL_NO_SSID_AVAIL: Serial.print("NO SSID"); break;
                 case WL_CONNECT_FAILED: Serial.print("FAILED"); break;
-                case WL_CONNECTION_LOST: Serial.print("LOST"); break;
-                case WL_DISCONNECTED:   Serial.print("DISCONNECTED"); break;
+                case WL_DISCONNECTED:   Serial.print("DISC"); break;
                 default: Serial.print(WiFi.status());
             }
             Serial.println("]");
@@ -1019,56 +739,42 @@ void setupWiFi() {
         attempts++;
     }
     Serial.println();
-    
+
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("✓ WiFi Connected!");
-        Serial.print("✓ IP Address: ");
+        Serial.print("✓ IP: ");
         Serial.println(WiFi.localIP());
-        Serial.print("✓ Signal Strength: ");
-        Serial.print(WiFi.RSSI());
-        Serial.println(" dBm");
-        Serial.print("Connect: telnet ");
-        Serial.println(WiFi.localIP());
+        Serial.printf("✓ RSSI: %d dBm\n", WiFi.RSSI());
         server.begin();
         Serial.println("✓ Telnet Server Started on port 23");
     } else {
         Serial.println("\n❌ WiFi Connection Failed!");
-        Serial.println("  Troubleshooting:");
-        Serial.println("  1. Check SSID and password");
-        Serial.println("  2. Ensure phone hotspot is ON");
-        Serial.println("  3. Move closer to WiFi source");
-        
-        // ★★★ Scan for available networks for debugging ★★★
-        Serial.println("\n  Scanning for available networks...");
+        Serial.println("Scanning networks...");
         int n = WiFi.scanNetworks();
-        if (n == 0) {
-            Serial.println("  No networks found!");
-        } else {
+        if (n == 0) Serial.println("  No networks found!");
+        else {
             Serial.printf("  Found %d networks:\n", n);
-            for (int i = 0; i < n && i < 10; i++) {
+            for (int i = 0; i < n && i < 10; i++)
                 Serial.printf("    %d: %s (%d dBm)\n", i+1, WiFi.SSID(i).c_str(), WiFi.RSSI(i));
-            }
         }
     }
 }
 
 void handleWiFiClient() {
-    // ★★★ Properly detect incoming connections ★★★
     if (server.hasClient()) {
         if (!client || !client.connected()) {
-            if (client) client.stop();  // Clean up old connection
+            if (client) client.stop();
             client = server.available();
             if (client) {
                 Serial.println("✓ Telnet client connected");
                 client.println("╔════════════════════════════════════════╗");
-                client.println("║  Mesmerize Maze Solver Console        ║");
-                client.println("║  V3.1 - Corrected Debouncing          ║");
+                client.println("║  Cascade PID Maze Solver Console      ║");
                 client.println("╚════════════════════════════════════════╝");
                 printMenu();
             }
         }
     }
-    
+
     if (client && client.connected() && client.available()) {
         String cmd = client.readStringUntil('\n');
         cmd.trim();
@@ -1080,9 +786,13 @@ void handleWiFiClient() {
     }
 }
 
+// =====================================================================
+//  COMMAND PROCESSING
+// =====================================================================
 void processCommand(String cmd) {
     cmd.toUpperCase();
-    
+
+    // === BASIC COMMANDS ===
     if (cmd == "START" || cmd == "GO") {
         if (currentState == WAIT_FOR_RUN_1 || currentState == WAIT_FOR_RUN_2) {
             robotRunning = true;
@@ -1100,301 +810,170 @@ void processCommand(String cmd) {
         currentState = WAIT_FOR_RUN_1;
         robotRunning = false;
         motors.stopBrake();
-        lastError = 0;
-        integral = 0;
+        resetControlState();
         junctionCount = 0;
         pathIndex = 0;
         rawPath = "";
         optimizedPath = "";
-        client.println("✓ RESET - Ready for Run 1");
+        client.println("✓ RESET — Ready for Run 1");
     }
     else if (cmd == "STATUS" || cmd == "ST") {
         printStatus();
     }
     else if (cmd == "PATH") {
         client.println("\n=== Path Info ===");
-        client.print("Raw: ");
-        client.print(rawPath);
-        client.print(" (");
-        client.print(rawPath.length());
-        client.println(" moves)");
-        client.print("Optimized: ");
-        client.print(optimizedPath);
-        client.print(" (");
-        client.print(optimizedPath.length());
-        client.println(" moves)");
+        client.printf("Raw: %s (%d moves)\n", rawPath.c_str(), rawPath.length());
+        client.printf("Optimized: %s (%d moves)\n", optimizedPath.c_str(), optimizedPath.length());
         if (rawPath.length() > 0 && optimizedPath.length() > 0) {
-            client.print("Saved: ");
-            client.print(rawPath.length() - optimizedPath.length());
-            client.println(" moves");
+            client.printf("Saved: %d moves\n", rawPath.length() - optimizedPath.length());
+        }
+        client.println("Segment distances (mm):");
+        int maxSeg = (currentState == SOLVING || currentState == FINISHED) ? optimizedPathLength : pathIndex;
+        float* segs = (currentState == SOLVING || currentState == FINISHED) ? optimizedSegments : pathSegments;
+        for (int i = 0; i < maxSeg; i++) {
+            client.printf("  [%d] %.0f mm\n", i, segs[i]);
         }
         client.println("=================\n");
-    }
-    else if (cmd.startsWith("DEBOUNCE ")) {
-        int deb = cmd.substring(9).toInt();
-        junctionDebounce = deb;
-        client.println("\n=== Debounce Info ===");
-        client.printf("Base Debounce: %lums\n", junctionDebounce);
-        client.printf("Current Speed: %d\n", baseSpeed);
-        client.printf("Dynamic Debounce: %lums\n", getDynamicDebounce());
-        client.println("Logic: Slower=Longer, Faster=Shorter");
-        client.println("=====================\n");
     }
     else if (cmd == "HELP" || cmd == "H") {
         printMenu();
     }
-    
-    // === PID TUNING ===
+
+    // === STEERING PID TUNING ===
+    else if (cmd.startsWith("SKP ")) {
+        float v = cmd.substring(4).toFloat();
+        steerPID.SetTunings(v, steerPID.GetKi(), steerPID.GetKd());
+        client.printf("✓ Steer Kp = %.5f\n", v);
+    }
+    else if (cmd.startsWith("SKI ")) {
+        float v = cmd.substring(4).toFloat();
+        steerPID.SetTunings(steerPID.GetKp(), v, steerPID.GetKd());
+        client.printf("✓ Steer Ki = %.5f\n", v);
+    }
+    else if (cmd.startsWith("SKD ")) {
+        float v = cmd.substring(4).toFloat();
+        steerPID.SetTunings(steerPID.GetKp(), steerPID.GetKi(), v);
+        client.printf("✓ Steer Kd = %.5f\n", v);
+    }
+    // Legacy KP/KI/KD commands → map to steering PID
     else if (cmd.startsWith("KP ")) {
-        Kp = cmd.substring(3).toDouble();
-        client.printf("✓ Kp = %.5f\n", Kp);
+        float v = cmd.substring(3).toFloat();
+        steerPID.SetTunings(v, steerPID.GetKi(), steerPID.GetKd());
+        client.printf("✓ Steer Kp = %.5f\n", v);
     }
     else if (cmd.startsWith("KI ")) {
-        Ki = cmd.substring(3).toDouble();
-        client.printf("✓ Ki = %.5f\n", Ki);
+        float v = cmd.substring(3).toFloat();
+        steerPID.SetTunings(steerPID.GetKp(), v, steerPID.GetKd());
+        client.printf("✓ Steer Ki = %.5f\n", v);
     }
     else if (cmd.startsWith("KD ")) {
-        Kd = cmd.substring(3).toDouble();
-        client.printf("✓ Kd = %.5f\n", Kd);
+        float v = cmd.substring(3).toFloat();
+        steerPID.SetTunings(steerPID.GetKp(), steerPID.GetKi(), v);
+        client.printf("✓ Steer Kd = %.5f\n", v);
     }
-    else if (cmd.startsWith("TUNE ")) {
-        int s1 = cmd.indexOf(' ', 5);
+
+    // === VELOCITY PID TUNING ===
+    else if (cmd.startsWith("VKP ")) {
+        float v = cmd.substring(4).toFloat();
+        motors.setVelPIDGains(v, VEL_KI_DEFAULT, VEL_KD_DEFAULT);
+        client.printf("✓ Vel Kp = %.3f\n", v);
+    }
+    else if (cmd.startsWith("VKI ")) {
+        float v = cmd.substring(4).toFloat();
+        motors.setVelPIDGains(VEL_KP_DEFAULT, v, VEL_KD_DEFAULT);
+        client.printf("✓ Vel Ki = %.3f\n", v);
+    }
+    else if (cmd.startsWith("VKD ")) {
+        float v = cmd.substring(4).toFloat();
+        motors.setVelPIDGains(VEL_KP_DEFAULT, VEL_KI_DEFAULT, v);
+        client.printf("✓ Vel Kd = %.3f\n", v);
+    }
+    else if (cmd.startsWith("VTUNE ")) {
+        // VTUNE <kp> <ki> <kd>
+        int s1 = cmd.indexOf(' ', 6);
         int s2 = cmd.indexOf(' ', s1 + 1);
         if (s1 > 0 && s2 > 0) {
-            Kp = cmd.substring(5, s1).toFloat();
-            Ki = cmd.substring(s1 + 1, s2).toFloat();
-            Kd = cmd.substring(s2 + 1).toFloat();
-            client.printf("✓ PID: Kp=%.1f Ki=%.2f Kd=%.1f\n", Kp, Ki, Kd);
-            integral = 0;  // Reset integral when tuning
+            float kp = cmd.substring(6, s1).toFloat();
+            float ki = cmd.substring(s1+1, s2).toFloat();
+            float kd = cmd.substring(s2+1).toFloat();
+            motors.setVelPIDGains(kp, ki, kd);
+            client.printf("✓ Vel PID: Kp=%.3f Ki=%.3f Kd=%.3f\n", kp, ki, kd);
         }
     }
-    
-    // === SPEED TUNING ===
+
+    // === SPEED SETTINGS ===
+    else if (cmd.startsWith("CRUISE ")) {
+        currentCruiseSpeed = constrain(cmd.substring(7).toFloat(), MIN_SPEED_MMS, maxSpeedMMS);
+        client.printf("✓ Cruise speed = %.0f mm/s\n", currentCruiseSpeed);
+    }
     else if (cmd.startsWith("SPEED ")) {
-        baseSpeed = cmd.substring(6).toInt();
-        baseSpeed = constrain(baseSpeed, 50, maxSpeed);
-        client.printf("✓ Base Speed = %d (Dynamic DB now: %lums)\n", baseSpeed, getDynamicDebounce());
+        // Legacy: map raw PWM-like value to mm/s (rough conversion)
+        float rawSpeed = cmd.substring(6).toFloat();
+        currentCruiseSpeed = constrain(rawSpeed, MIN_SPEED_MMS, maxSpeedMMS);
+        client.printf("✓ Cruise speed = %.0f mm/s\n", currentCruiseSpeed);
     }
-    else if (cmd.startsWith("HIGHSPEED ")) {
-        highSpeed = cmd.substring(10).toInt();
-        highSpeed = constrain(highSpeed, 50, maxSpeed);
-        client.printf("✓ High Speed = %d\n", highSpeed);
+    else if (cmd.startsWith("MAXSPEED ")) {
+        maxSpeedMMS = constrain(cmd.substring(9).toFloat(), MIN_SPEED_MMS, 1000.0f);
+        steerPID.SetOutputLimits(-maxSpeedMMS, maxSpeedMMS);
+        client.printf("✓ Max speed = %.0f mm/s\n", maxSpeedMMS);
     }
-    else if(cmd.startsWith("MAXSPEED ")){
-        maxSpeed = cmd.substring(9).toInt();
-        client.printf("Max speed = %d\n", maxSpeed);
-    }
-    else if (cmd.startsWith("JUNCTIONDB ")) {
-        junctionDebounce = cmd.substring(12).toInt(); // substring argument changed from 11 -> 12 << nikhil
-        junctionDebounce = constrain(junctionDebounce, 50, 1000); // base constraint changed from 80 to 50 << nikhil
-        client.printf("✓ Base Junction Debounce = %lums (Dynamic DB now: %lums)\n", 
-                    junctionDebounce, getDynamicDebounce());
-    }
-    
-    // === MOTOR TICK TUNING ===
-    else if (cmd.startsWith("CENTER ")) {
-        int ticks = cmd.substring(7).toInt();
-        Motors::updateCenterTicks(ticks);
-        client.printf("✓ Center Ticks = %d\n", ticks);
-        Serial.printf("WiFi: Center Ticks = %d\n", ticks);
-    }
-    else if (cmd.startsWith("TURN90 ")) {
-        int ticks = cmd.substring(7).toInt();
-        Motors::updateTurn_90_Ticks(ticks);
-        client.printf("✓ Turn 90° Ticks = %d\n", ticks);
-    }
-    else if (cmd.startsWith("MOTORS ")) {
-        int s1 = cmd.indexOf(' ', 7);
-        if (s1 > 0) {
-            int centerTicks = cmd.substring(7, s1).toInt();
-            int turn90Ticks = cmd.substring(s1 + 1).toInt();
-            Motors::updateCenterTicks(centerTicks);
-            Motors::updateTurn_90_Ticks(turn90Ticks);
-            client.printf("✓ Motors: Center=%d Turn90=%d\n", centerTicks, turn90Ticks);
-            Serial.printf("WiFi: Motors: Center=%d Turn90=%d\n", centerTicks, turn90Ticks);
-        }
-    }
-    else if (cmd.startsWith("TURN180 ")){
-        int ticks = cmd.substring(8).toInt();
-        Motors::updateTurn_180_Ticks(ticks);
-        client.printf("✓ Turn 180° Ticks = %d\n", ticks);
-    }
-    else if (cmd.startsWith("BLIND90 ")) {
-        int ms = cmd.substring(8).toInt();
-        BLIND_TURN_MS_90 = constrain(ms, 0, 500);
-        client.printf("✓ Blind turn time = %dms\n", BLIND_TURN_MS_90);
-    }
-    else if (cmd.startsWith("BLIND180 ")) {
-        int ms = cmd.substring(9).toInt();
-        BLIND_TURN_MS_180 = constrain(ms, 0, 500);
-        client.printf("✓ Blind turn time = %dms\n", BLIND_TURN_MS_180);
-    }
-    else if (cmd.startsWith("TIMER90 ")) {
-        int ms = cmd.substring(8).toInt();
-        TURN_TIMER_90 = constrain(ms, 0, 500);
-        client.printf("✓ Blind turn time = %dms\n", TURN_TIMER_90);
-    }
-    else if (cmd.startsWith("TIMER180 ")) {
-        int ms = cmd.substring(9).toInt();
-        TURN_TIMER_180 = constrain(ms, 15, 500);
-        client.printf("✓ Blind turn time = %dms\n", TURN_TIMER_180);
+    else if (cmd.startsWith("TURNSPEED ")) {
+        turnSpeedMMS = constrain(cmd.substring(10).toFloat(), MIN_SPEED_MMS, maxSpeedMMS);
+        client.printf("✓ Turn speed = %.0f mm/s\n", turnSpeedMMS);
     }
 
-    // NEW: Min turn percent tuning
-    else if (cmd.startsWith("MINTP ")) {
-        int percent = cmd.substring(6).toInt();
-        Motors::updateMinTurnPercent(percent);
-        client.printf("✓ Min Turn Percent = %d%%\n", MIN_TURN_PERCENT);
+    // === JUNCTION TUNING ===
+    else if (cmd.startsWith("JCONFIRM ")) {
+        junctionConfirmMM = constrain(cmd.substring(9).toFloat(), 3.0f, 100.0f);
+        client.printf("✓ Junction confirm distance = %.1f mm\n", junctionConfirmMM);
     }
-    
-    // add state change
-    else if (cmd.startsWith("WAIT")){
+    else if (cmd.startsWith("JSPACE ")) {
+        junctionMinSpacing = constrain(cmd.substring(7).toFloat(), 10.0f, 500.0f);
+        client.printf("✓ Junction min spacing = %.1f mm\n", junctionMinSpacing);
+    }
+    else if (cmd.startsWith("HTOL ")) {
+        headingTolerance = constrain(cmd.substring(5).toFloat(), 0.01f, 0.5f);
+        client.printf("✓ Heading tolerance = %.3f rad (%.1f°)\n",
+            headingTolerance, headingTolerance * 180.0f / M_PI);
+    }
+
+    // === STATE CHANGE ===
+    else if (cmd == "WAIT") {
         currentState = WAIT_FOR_RUN_2;
+        client.println("✓ Switched to WAIT_FOR_RUN_2");
     }
-
-    //addition for turnings speed controll
-    else if (cmd.startsWith("TS ")) {
-        int speed = cmd.substring(3).toInt();
-        Motors::updateSpeeds(150, speed, 200);
-        client.printf("✓ Turn 90° Ticks = %d\n", speed);
-    }
-    // slowdown ticks
-    else if (cmd.startsWith("SDT ")) {
-        int ticks = cmd.substring(4).toInt();
-        SLOWDOWN_TICKS = ticks;
-        client.printf("✓ Slow_Down Ticks = %d\n", ticks);
-    }
-    
-
-    //addition for delays
-    else if (cmd.startsWith("DBC ")){
-        int dl = cmd.substring(4).toInt(); 
-        delayBeforeCenter = dl;
-        client.printf("delay before center: %d", dl);
-        client.println();
-    }
-    else if (cmd.startsWith("DAC ")){
-        int dl = cmd.substring(4).toInt(); 
-        delayAfterCenter = dl;
-        client.printf("delay after center: %d", dl);
-        client.println();
-    }
-    else if (cmd.startsWith("DL1 ")){
-        int dl = cmd.substring(4).toInt(); 
-        dl1 = dl;
-        client.printf("changed dl1: %d", dl);
-        client.println();
-    }
-    else if (cmd.startsWith("DL2 ")){
-        int dl = cmd.substring(4).toInt(); 
-        dl2 = dl;
-        client.printf("changed dl2: %d", dl);
-        client.println();
-    }
-    else if (cmd.startsWith("DL3 ")){
-        int dl = cmd.substring(4).toInt(); 
-        dl3 = dl;
-        client.printf("changed dl3: %d", dl);
-        client.println();
-    }
-    else if (cmd.startsWith("DL4 ")){
-        int dl = cmd.substring(4).toInt(); 
-        dl4 = dl;
-        client.printf("changed dl4: %d", dl);
-        client.println();
-    }
-    else if (cmd.startsWith("DL5 ")){
-        int dl = cmd.substring(4).toInt(); 
-        dl5 = dl;
-        client.printf("changed dl4: %d", dl);
-        client.println();
-    }
-
-    // confidence tuning
-    else if (cmd.startsWith("CON ")) {
-        float input_conf = cmd.substring(4).toFloat();
-        LEFT_CONFIDENCE = input_conf;
-        RIGHT_CONFIDENCE = input_conf;
-        client.printf("Left and Right Confidence: %.4f", input_conf);
-        client.println();
-    }
-
-    //sampel_Rate tunin:-
-    else if(cmd.startsWith("SAM ")){
-        int x = cmd.substring(4).toInt();
-        sample_rate = x;
-        client.printf("smaple_rate: %d", sample_rate);
-        client.println();
-    }
-
-    // pid alignment correction
-
-    // else if (cmd.startsWith("AS ")){
-    //     int speed = cmd.substring(3).toInt(); 
-    //     adjusted_speed = speed;
-    //     client.printf("changed adjusted speed: %d", speed);
-    //     client.println();
-    // }
-    // else if (cmd.startsWith("ACT ")){
-    //     int t = cmd.substring(4).toInt(); 
-    //     align_corr_time = t;
-    //     client.printf("changed alignment correction time: %d", t);
-    //     client.println();
-    // }
-    // else if (cmd.startsWith("CM ")){
-    //     float factor = cmd.substring(3).toInt(); 
-    //     correction_multiplier = factor;
-    //     client.printf("changed correction multiplier: %d", factor);
-    //     client.println();
-    // }
 
     // === TESTING ===
     else if (cmd == "TEST" || cmd == "T") {
-        bool sensors_arr[8];
-        sensors.getSensorArray(sensors_arr);
-        
+        bool sv[8];
+        sensors.getSensorArray(sv);
         client.println("\n=== Sensor Test ===");
         client.print("Pattern: [");
-        for (int i = 0; i < 8; i++) {
-            client.print(sensors_arr[i] ?  "█" : "·");
-        }
+        for (int i = 0; i < 8; i++) client.print(sv[i] ? "█" : "·");
         client.println("]");
         client.printf("Error: %.2f\n", sensors.getLineError());
-        client.printf("Position: %.2f\n", sensors.getPosition());
         client.printf("Active: %d sensors\n", sensors.getActiveSensorCount());
-        client.printf("On Line: %s\n", sensors.onLine() ? "YES" : "NO");
-        client.printf("Finish: %s\n", sensors.isEndPoint() ? "YES" : "NO");
+        client.printf("Mask: 0x%02X\n", sensors.getActiveSensorMask());
+        client.printf("Left branch: %s\n", sensors.hasLeftBranch() ? "YES" : "NO");
+        client.printf("Right branch: %s\n", sensors.hasRightBranch() ? "YES" : "NO");
+        client.printf("Straight: %s\n", sensors.hasStraight() ? "YES" : "NO");
+        client.printf("Line end: %s\n", sensors.isLineEnd() ? "YES" : "NO");
+        client.printf("Endpoint: %s\n", sensors.isEndPoint() ? "YES" : "NO");
         client.println("==================\n");
     }
     else if (cmd == "ENCTEST") {
-    motors.clearEncoders();
-    motors.setSpeeds(100, 100);  // Both forward
-    delay(1000);
-    motors.stopBrake();
-    
-    long left = motors.getLeftCount();
-    long right = motors.getRightCount();
-    
-    client.printf("Left encoder:  %ld\n", left);
-    client.printf("Right encoder: %ld\n", right);
-    client.printf("Difference:    %ld (%.1f%%)\n", 
-                abs(left - right), 
-                100.0 * abs(left - right) / max(left, right));
-    
-    // Run test 5 times
-    for (int t = 0; t < 5; t++) {
         motors.clearEncoders();
         motors.setSpeeds(100, 100);
-        delay(500);
+        delay(1000);
         motors.stopBrake();
-        delay(100);
-        client.printf("Trial %d: L=%ld R=%ld diff=%ld\n", 
-                    t, motors.getLeftCount(), motors.getRightCount(),
-                    abs(motors.getLeftCount() - motors.getRightCount()));
+        long left = motors.getLeftCount();
+        long right = motors.getRightCount();
+        client.printf("Left:  %ld  (%.1f mm)\n", left, left * MM_PER_TICK);
+        client.printf("Right: %ld  (%.1f mm)\n", right, right * MM_PER_TICK);
+        client.printf("Diff:  %ld  (%.1f%%)\n",
+            abs(left - right),
+            100.0 * abs(left - right) / max(left, right));
     }
-}
-
-    //sensing
     else if (cmd == "CAL") {
         sensors.printCalibrationToClient(client);
     }
@@ -1403,17 +982,12 @@ void processCommand(String cmd) {
         bool digital[8];
         sensors.readRaw(rawValues);
         sensors.readDigital(digital);
-        
         client.println("\n=== Raw Sensor Readings ===");
         client.print("Digital: [");
-        for (int i = 0; i < 8; i++) {
-            client.print(digital[i] ? "█" : "·");
-        }
+        for (int i = 0; i < 8; i++) client.print(digital[i] ? "█" : "·");
         client.println("]");
-        client.println("Sensor | Raw    | Detected");
-        client.println("-------|--------|----------");
         for (int i = 0; i < 8; i++) {
-            client.printf("  S%-2d  | %-6d | %s\n", i+1, rawValues[i], digital[i] ? "LINE" : "-");
+            client.printf("  S%-2d | %-6d | %s\n", i+1, rawValues[i], digital[i] ? "LINE" : "-");
         }
         client.printf("Sensitivity: %.2f\n", sensors.getSensitivity());
         client.println("===========================\n");
@@ -1422,85 +996,116 @@ void processCommand(String cmd) {
         float sens = cmd.substring(5).toFloat();
         sensors.setSensitivity(sens);
         client.printf("✓ Sensitivity = %.2f\n", sensors.getSensitivity());
-        client.println("  0.00 = most sensitive (default)");
-        client.println("  1.00 = least sensitive (only strong white)");
-        // Show what happened to thresholds
         sensors.printCalibrationToClient(client);
     }
-
-    //pid
     else if (cmd == "PID") {
         client.println("\n=== PID Values ===");
-        client.printf("Kp = %.5f\n", Kp);
-        client.printf("Ki = %.5f\n", Ki);
-        client.printf("Kd = %.5f\n", Kd);
-        client.printf("Last Error = %.5f\n", lastError);
-        client.printf("Integral = %.5f\n", integral);
+        client.printf("Steer: Kp=%.5f Ki=%.5f Kd=%.5f\n",
+            steerPID.GetKp(), steerPID.GetKi(), steerPID.GetKd());
+        client.printf("Steer Output: %.2f  Input: %.2f  Setpoint: %.2f\n",
+            steerOutput, steerInput, steerSetpoint);
+        client.printf("Vel L Target: %.1f mm/s  R Target: %.1f mm/s\n",
+            motors.getLeftTargetMMS(), motors.getRightTargetMMS());
+        client.printf("Vel L PWM: %.0f   R PWM: %.0f\n",
+            motors.getLeftPWMOut(), motors.getRightPWMOut());
         client.println("==================\n");
     }
+    else if (cmd == "ODO") {
+        client.println("\n=== Odometry ===");
+        client.printf("Pos: (%.1f, %.1f) mm\n", odometry.getX(), odometry.getY());
+        client.printf("Heading: %.2f rad (%.1f°)\n",
+            odometry.getHeading(), odometry.getHeading() * 180.0f / M_PI);
+        client.printf("Segment: %.1f mm\n", odometry.getSegmentMM());
+        client.printf("Velocity: %.1f mm/s  ω: %.2f rad/s\n",
+            odometry.getLinearVelocity(), odometry.getAngularVelocity());
+        client.println("================\n");
+    }
+    else if (cmd == "DIMS") {
+        client.println("\n=== Robot Dimensions ===");
+        client.printf("Wheel Ø:    %.1f mm\n", WHEEL_DIAMETER_MM);
+        client.printf("Wheel base: %.1f mm\n", WHEEL_BASE_MM);
+        client.printf("Encoder CPR: %.0f\n", ENCODER_CPR);
+        client.printf("mm/tick:     %.4f\n", MM_PER_TICK);
+        client.printf("ticks/mm:    %.3f\n", TICKS_PER_MM);
+        client.printf("Sensor offset: %.1f mm\n", SENSOR_OFFSET_MM);
+        client.printf("Castor offset: %.1f mm\n", CASTOR_OFFSET_MM);
+        client.printf("Sensor pitch: %.1f mm\n", SENSOR_PITCH_MM);
+        client.printf("Line width:   %.1f mm\n", LINE_WIDTH_MM);
+        client.println("========================\n");
+    }
     else {
-        client.println("❌ Unknown.Type HELP");
+        client.println("❌ Unknown. Type HELP");
     }
 }
 
+// =====================================================================
+//  MENU & STATUS
+// =====================================================================
 void printMenu() {
     client.println("\n=== Commands ===");
-    client.println("START / GO - Start robot");
-    client.println("STOP / S - Stop robot");
-    client.println("RESET / R - Reset to Run 1");
-    client.println("HELP / H - Show this menu");
-    client.println("STATUS / ST - Show status");
-    client.println("PATH - Show path info");
-    client.println("DEBOUNCE - Show debounce info");
-    client.println("TEST - Test sensors");
-    client.println("=== Sensitivity ===");
-    client.println("SENS <0.0-1.0> - Set sensitivity (0=max, 1=min)");
-    client.println("RAW  - Show raw sensor readings");
-    client.println("CAL  - Show calibration thresholds");
-    client.println("PID - Show PID values");
+    client.println("START/GO     - Start robot");
+    client.println("STOP/S       - Stop robot");
+    client.println("RESET/R      - Reset to Run 1");
+    client.println("HELP/H       - This menu");
+    client.println("STATUS/ST    - Show status");
+    client.println("PATH         - Show path info");
     client.println("");
-    client.println("=== PID Tuning ===");
-    client.println("KP <val> - Set proportional gain");
-    client.println("KI <val> - Set integral gain");
-    client.println("KD <val> - Set derivative gain");
-    client.println("TUNE <kp> <ki> <kd> - Set all PID");
+    client.println("=== Steering PID ===");
+    client.println("SKP/SKI/SKD <val> - Steering PID gains");
+    client.println("KP/KI/KD <val>    - (legacy, same as SKP/SKI/SKD)");
     client.println("");
-    client.println("=== Speed Settings ===");
-    client.println("SPEED <val> - Base speed");
-    client.println("HIGHSPEED <val> - High speed for Run 2");
+    client.println("=== Velocity PID ===");
+    client.println("VKP/VKI/VKD <val>      - Velocity PID gains");
+    client.println("VTUNE <kp> <ki> <kd>   - Set all velocity PID");
     client.println("");
-    client.println("=== Junction Settings ===");
-    client.println("JUNCTIONDB <ms> - Base junction debounce");
+    client.println("=== Speeds (mm/s) ===");
+    client.println("CRUISE <val>     - Cruise speed");
+    client.println("MAXSPEED <val>   - Max speed");
+    client.println("TURNSPEED <val>  - Turn speed");
     client.println("");
-    client.println("=== Motor Ticks ===");
-    client.println("CENTER <ticks> - Set ticks to center");
-    client.println("TURN90 <ticks> - Set 90° turn ticks");
-    client.println("MOTORS <center> <turn90> - Set both");
-    client.println("TURN180 <ticks> - Set 180° turn ticks");
-    client.println("MINTP <percent> - Min % before sensor check (30-95)");
+    client.println("=== Junction ===");
+    client.println("JCONFIRM <mm>  - Junction confirm distance");
+    client.println("JSPACE <mm>    - Min junction spacing");
+    client.println("HTOL <rad>     - Heading tolerance");
+    client.println("");
+    client.println("=== Sensors ===");
+    client.println("TEST/T  - Sensor test");
+    client.println("RAW     - Raw sensor values");
+    client.println("CAL     - Calibration data");
+    client.println("SENS <0-1> - Sensitivity");
+    client.println("");
+    client.println("=== Info ===");
+    client.println("PID   - PID state");
+    client.println("ODO   - Odometry state");
+    client.println("DIMS  - Robot dimensions");
+    client.println("ENCTEST - Encoder test");
     client.println("================\n");
 }
+
 void printStatus() {
     client.println("\n=== Status ===");
     client.print("State: ");
-    switch(currentState) {
+    switch (currentState) {
         case WAIT_FOR_RUN_1: client.println("WAIT_RUN_1"); break;
-        case MAPPING: client.println("MAPPING"); break;
-        case OPTIMIZING: client.println("OPTIMIZING"); break;
+        case MAPPING:        client.println("MAPPING"); break;
+        case OPTIMIZING:     client.println("OPTIMIZING"); break;
         case WAIT_FOR_RUN_2: client.println("WAIT_RUN_2"); break;
-        case SOLVING: client.println("SOLVING"); break;
-        case FINISHED: client.println("FINISHED"); break;
-        default: client.println("CALIBRATING");
+        case SOLVING:        client.println("SOLVING"); break;
+        case FINISHED:       client.println("FINISHED"); break;
+        default:             client.println("CALIBRATING");
     }
-    client.printf("PID: Kp=%.5f Ki=%.5f Kd=%.5f\n", Kp, Ki, Kd);
-    client.printf("Speed: Base=%d High=%d\n", baseSpeed, highSpeed);
-    client.printf("Junction Debounce: Base=%lums Dynamic=%lums\n", 
-                junctionDebounce, getDynamicDebounce());
-    client.printf("Motor Ticks: Center=%d Turn90=%d Turn180=%d\n", TICKS_TO_CENTER, TICKS_FOR_90_DEG, TICKS_FOR_180_DEG);
+    client.printf("Turn mode: %d\n", turnMode);
+    client.printf("Steer PID: Kp=%.5f Ki=%.5f Kd=%.5f\n",
+        steerPID.GetKp(), steerPID.GetKi(), steerPID.GetKd());
+    client.printf("Cruise: %.0f mm/s  Max: %.0f mm/s  Turn: %.0f mm/s\n",
+        currentCruiseSpeed, maxSpeedMMS, turnSpeedMMS);
+    client.printf("Junction confirm: %.1f mm  Spacing: %.1f mm\n",
+        junctionConfirmMM, junctionMinSpacing);
+    client.printf("Heading: %.2f rad  Target: %.2f rad\n",
+        odometry.getHeading(), targetHeading);
+    client.printf("Segment: %.1f mm\n", odometry.getSegmentMM());
+    client.printf("Junctions: %d  PathIdx: %d\n", junctionCount, pathIndex);
     client.printf("Error: %.2f\n", sensors.getLineError());
-    client.printf("Junctions: %d\n", junctionCount);
-    client.printf("Path Index: %d\n", pathIndex);
     client.printf("On Line: %s\n", sensors.onLine() ? "YES" : "NO");
-    client.printf("Paths: %d\n", rawPath);
     client.println("==============\n");
 }

@@ -1,73 +1,89 @@
 /*
  * Motors.h
- * Enhanced motor control with WiFi-tunable parameters
+ * Motor control with cascade PID architecture.
+ * Inner loop: per-wheel velocity PID (QuickPID).
+ * Outer loop (steering) is handled in main.cpp.
  */
 
 #pragma once
 #include "Pins.h"
+#include "Config.h"
 #include <ESP32Encoder.h>
+#include <QuickPID.h>
 
-class Sensors;
+class Sensors;  // forward decl for legacy compatibility
 
-// WiFi-tunable motor parameters (defined as extern, initialized in Motors.cpp)
-extern int TICKS_FOR_90_DEG;
-extern int TICKS_FOR_180_DEG;
-extern int TICKS_TO_CENTER;
-extern int BASE_SPEED;
-extern int TURN_SPEED;
-extern int MAX_SPEED;
-extern int MIN_TURN_PERCENT;  // Minimum % of ticks before sensor check kicks in
-extern int BLIND_TURN_MS_90;
-extern int BLIND_TURN_MS_180;
-extern int TURN_TIMER_90;
-extern int TURN_TIMER_180;
-
+// WiFi-tunable speed/motor parameters
+extern float cruiseSpeedMMS;
+extern float maxSpeedMMS;
+extern float turnSpeedMMS;
 
 class Motors {
 public:
     Motors();
     void setup();
-    
-    void setSpeeds(int leftSpeed, int rightSpeed);
+
+    // --- Low-level PWM control (calibration / direct override) ---
+    void setSpeeds(int leftPWM, int rightPWM);
     void stopBrake();
-    
-    // Original encoder-only turn methods
-    void turn_90_left();
-    void turn_90_right();
-    void turn_180_back();
 
-     // NEW: Smart turn methods with sensor feedback
-    void turn_90_left_smart(Sensors& sensors);
-    void turn_90_right_smart(Sensors& sensors);
-    void turn_180_back_smart(Sensors& sensors);
+    // --- Velocity PID (inner loop) ---
+    // Set target wheel velocities in mm/s.  Positive = forward.
+    void setTargetVelocities(float leftMMS, float rightMMS);
+    // Call every control cycle (~1 kHz).  Reads encoder deltas, computes PID, writes PWM.
+    void updateVelocityPID();
+    // Tune velocity PID gains live
+    void setVelPIDGains(float kp, float ki, float kd);
 
-    void rotate();
-    void moveForward(int ticks);
-    
-    long getLeftCount();
-    long getRightCount();
-    long getAverageCount();
+    // --- Utility ---
+    void moveForward(int ticks);  // blocking, for calibration only
+    void rotate();                // open-loop spin for sensor calibration
+
+    // --- Encoder access (for Odometry) ---
+    ESP32Encoder* getLeftEncoder()  { return &leftEncoder; }
+    ESP32Encoder* getRightEncoder() { return &rightEncoder; }
+    long getLeftCount()   { return leftEncoder.getCount(); }
+    long getRightCount()  { return rightEncoder.getCount(); }
+    long getAverageCount(){ return (leftEncoder.getCount() + rightEncoder.getCount()) / 2; }
     void clearEncoders();
-    
-    // WiFi tuning methods
-    static void updateTurn_90_Ticks(int ticks90);
-    static void updateTurn_180_Ticks(int ticks180);
 
-    static void updateCenterTicks(int ticks);
-    static void updateSpeeds(int base, int turn, int max);
+    // --- WiFi tuning helpers ---
+    static void updateSpeeds(float cruise, float turn, float maxSpd);
 
-    static void updateMinTurnPercent(int percent);
-    static void updateBlindTurnMs_180(int ms);
-    static void updateBlindTurnMs_90(int ms);
-    static void updateTurn_timer_90(int ms);
-    static void update_turn_timer_180(int ms);
+    // --- Velocity PID state (for telemetry) ---
+    float getLeftTargetMMS()  const { return leftTargetMMS; }
+    float getRightTargetMMS() const { return rightTargetMMS; }
+    float getLeftPWMOut()     const { return leftPWMOutput; }
+    float getRightPWMOut()    const { return rightPWMOutput; }
 
 private:
-    const int pwm_channel_left = 0;
+    // PWM channels
+    const int pwm_channel_left  = 0;
     const int pwm_channel_right = 1;
-    const int pwm_frequency = 5000;
+    const int pwm_frequency  = 5000;
     const int pwm_resolution = 8;
-    
+
+    // Encoders
     ESP32Encoder leftEncoder;
     ESP32Encoder rightEncoder;
+
+    // Velocity PID state
+    float leftTargetMMS,  rightTargetMMS;
+    float leftTargetTicks, rightTargetTicks;   // target in ticks/interval
+    float leftMeasuredTicks, rightMeasuredTicks;
+    float leftPWMOutput, rightPWMOutput;
+
+    // Per-wheel QuickPID controllers
+    QuickPID leftVelPID;
+    QuickPID rightVelPID;
+
+    // Previous encoder counts (for delta calculation)
+    long prevLeftCount, prevRightCount;
+    unsigned long lastVelUpdateUs;
+
+    // Convert mm/s to ticks per control interval
+    float mmsToTicksPerInterval(float mms, float dtSec);
+
+    // Apply PWM to hardware
+    void applyPWM(int leftPWM, int rightPWM);
 };
