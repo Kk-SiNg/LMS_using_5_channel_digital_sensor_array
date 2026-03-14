@@ -52,9 +52,9 @@ constexpr int   PWM_MIN = 0;
 //  VELOCITY PID DEFAULTS (inner loop, per wheel)
 //  Error unit: ticks/interval
 // =====================================================================
-constexpr float VEL_KP_DEFAULT = 1.5f;
-constexpr float VEL_KI_DEFAULT = 0.8f;
-constexpr float VEL_KD_DEFAULT = 0.05f;
+constexpr float VEL_KP_DEFAULT = 2.0f;    // moderate P for correction
+constexpr float VEL_KI_DEFAULT = 0.1f;    // low I to avoid windup
+constexpr float VEL_KD_DEFAULT = 0.02f;   // small D for damping
 
 // =====================================================================
 //  STEERING PID DEFAULTS (outer loop)

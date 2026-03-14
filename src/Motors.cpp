@@ -12,6 +12,11 @@ float cruiseSpeedMMS = DEFAULT_CRUISE_SPEED_MMS;
 float maxSpeedMMS    = MAX_SPEED_MMS;
 float turnSpeedMMS   = TURN_SPEED_MMS;
 
+// Feedforward: approximate PWM per mm/s.
+// This is a rough linear estimate. At ~130 PWM the robot does ~200 mm/s
+// → PWM_PER_MMS ≈ 130/200 = 0.65.  WiFi-tunable via FFGAIN command.
+float feedforwardGain = 0.65f;
+
 Motors::Motors()
     : leftTargetMMS(0), rightTargetMMS(0),
       leftTargetTicks(0), rightTargetTicks(0),
@@ -50,12 +55,15 @@ void Motors::setup() {
     rightEncoder.clearCount();
 
     // Configure velocity PIDs
-    leftVelPID.SetOutputLimits(-PWM_MAX, PWM_MAX);
-    rightVelPID.SetOutputLimits(-PWM_MAX, PWM_MAX);
+    // Output limits are small — PID does CORRECTION only, feedforward handles base PWM
+    leftVelPID.SetOutputLimits(-100, 100);
+    rightVelPID.SetOutputLimits(-100, 100);
     leftVelPID.SetSampleTimeUs(CONTROL_INTERVAL_US);
     rightVelPID.SetSampleTimeUs(CONTROL_INTERVAL_US);
     leftVelPID.SetMode(QuickPID::Control::automatic);
     rightVelPID.SetMode(QuickPID::Control::automatic);
+
+    leftAccumTicks = rightAccumTicks = 0;
 
     prevLeftCount  = leftEncoder.getCount();
     prevRightCount = rightEncoder.getCount();
@@ -133,34 +141,58 @@ void Motors::setTargetVelocities(float leftMMS, float rightMMS) {
 }
 
 void Motors::updateVelocityPID() {
-    unsigned long nowUs = micros();
-    float dtSec = (float)(nowUs - lastVelUpdateUs) / 1e6f;
-    if (dtSec <= 0.0f) dtSec = 0.001f;
-    lastVelUpdateUs = nowUs;
-
-    // Read encoder deltas
+    // Accumulate encoder ticks continuously (don't lose any between PID cycles)
     long leftCount  = leftEncoder.getCount();
     long rightCount = rightEncoder.getCount();
-    leftMeasuredTicks  = (float)(leftCount  - prevLeftCount);
-    rightMeasuredTicks = (float)(rightCount - prevRightCount);
+    leftAccumTicks  += (leftCount  - prevLeftCount);
+    rightAccumTicks += (rightCount - prevRightCount);
     prevLeftCount  = leftCount;
     prevRightCount = rightCount;
 
-    // Convert target mm/s to ticks per this interval
+    // Only run PID at the control interval rate
+    unsigned long nowUs = micros();
+    unsigned long elapsedUs = nowUs - lastVelUpdateUs;
+    if (elapsedUs < CONTROL_INTERVAL_US) return;  // not time yet
+
+    float dtSec = (float)elapsedUs / 1e6f;
+    lastVelUpdateUs = nowUs;
+
+    // Use accumulated ticks as measurement, then reset accumulator
+    leftMeasuredTicks  = (float)leftAccumTicks;
+    rightMeasuredTicks = (float)rightAccumTicks;
+    leftAccumTicks  = 0;
+    rightAccumTicks = 0;
+
+    // Convert target mm/s to ticks expected in this interval
     leftTargetTicks  = mmsToTicksPerInterval(leftTargetMMS, dtSec);
     rightTargetTicks = mmsToTicksPerInterval(rightTargetMMS, dtSec);
 
-    // Compute PID
+    // Compute PID correction (small adjustment around feedforward)
     leftVelPID.Compute();
     rightVelPID.Compute();
 
-    // Apply
-    applyPWM((int)leftPWMOutput, (int)rightPWMOutput);
+    // Feedforward: estimate base PWM from target speed
+    float leftFF  = leftTargetMMS  * feedforwardGain;
+    float rightFF = rightTargetMMS * feedforwardGain;
+
+    // Total PWM = feedforward + PID correction
+    int leftPWM  = (int)(leftFF  + leftPWMOutput);
+    int rightPWM = (int)(rightFF + rightPWMOutput);
+
+    applyPWM(leftPWM, rightPWM);
 }
 
 void Motors::setVelPIDGains(float kp, float ki, float kd) {
     leftVelPID.SetTunings(kp, ki, kd);
     rightVelPID.SetTunings(kp, ki, kd);
+}
+
+void Motors::setFeedforwardGain(float gain) {
+    feedforwardGain = constrain(gain, 0.0f, 5.0f);
+}
+
+float Motors::getFeedforwardGain() const {
+    return feedforwardGain;
 }
 
 // =====================================================================

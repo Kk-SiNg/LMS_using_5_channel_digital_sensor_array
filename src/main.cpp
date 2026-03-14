@@ -900,6 +900,11 @@ void processCommand(String cmd) {
             client.printf("✓ Vel PID: Kp=%.3f Ki=%.3f Kd=%.3f\n", kp, ki, kd);
         }
     }
+    else if (cmd.startsWith("FFGAIN ")) {
+        float g = cmd.substring(7).toFloat();
+        motors.setFeedforwardGain(g);
+        client.printf("✓ Feedforward gain = %.3f (PWM per mm/s)\n", motors.getFeedforwardGain());
+    }
 
     // === SPEED SETTINGS ===
     else if (cmd.startsWith("CRUISE ")) {

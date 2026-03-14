@@ -17,6 +17,7 @@ class Sensors;  // forward decl for legacy compatibility
 extern float cruiseSpeedMMS;
 extern float maxSpeedMMS;
 extern float turnSpeedMMS;
+extern float feedforwardGain;  // PWM per mm/s (feedforward estimate)
 
 class Motors {
 public:
@@ -34,6 +35,9 @@ public:
     void updateVelocityPID();
     // Tune velocity PID gains live
     void setVelPIDGains(float kp, float ki, float kd);
+    // Feedforward gain (PWM per mm/s)
+    void  setFeedforwardGain(float gain);
+    float getFeedforwardGain() const;
 
     // --- Utility ---
     void moveForward(int ticks);  // blocking, for calibration only
@@ -79,6 +83,7 @@ private:
 
     // Previous encoder counts (for delta calculation)
     long prevLeftCount, prevRightCount;
+    long leftAccumTicks, rightAccumTicks;  // accumulate between PID cycles
     unsigned long lastVelUpdateUs;
 
     // Convert mm/s to ticks per control interval
